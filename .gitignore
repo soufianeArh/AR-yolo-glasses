@@ -1,0 +1,25 @@
+# Python
+tools/.venv/
+tools/_gen/
+__pycache__/
+*.pyc
+
+# Third-party binaries (re-download: ONNX Runtime 1.32.0, win-x64)
+third_party/
+
+# Model weights (re-create: yolov8n.pt -> export to ONNX, fixed 640x640, opset 17)
+models/*.pt
+models/*.onnx
+
+# Test media copied from soufiane-easy/samples
+testdata/
+
+# Build output
+build/
+out/
+cmake-build-*/
+
+# IDE
+.idea/
+.vs/
+*.iml
