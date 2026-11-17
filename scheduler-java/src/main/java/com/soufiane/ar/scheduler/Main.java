@@ -30,7 +30,10 @@ public final class Main {
 
         WorkerRegistry registry = new WorkerRegistry(cfg.heartbeatTimeoutMs());
         Metrics metrics = new Metrics();
-        FrameStreamService frames = new FrameStreamService(registry, metrics, cfg);
+        ResultPublisher publisher = cfg.redis().isEmpty() ? null
+                : new ResultPublisher(cfg.redis(), cfg.stream(), cfg.redisBuffer(), cfg.streamMaxLen());
+        metrics.setPublisher(publisher);
+        FrameStreamService frames = new FrameStreamService(registry, metrics, cfg, publisher);
 
         Server server = Grpc.newServerBuilderForPort(cfg.port(), InsecureServerCredentials.create())
                 // Virtual threads: handlers never need a thread pool sized by hand.
@@ -62,13 +65,15 @@ public final class Main {
             }
             server.shutdownNow();
             registry.close();
+            if (publisher != null) publisher.close();
             Log.info("stopped. totals:" + metrics.totals());
         }, "shutdown"));
 
         // Tests wait for this exact line.
         Log.info("READY listening on 0.0.0.0:" + cfg.port() + ", frame deadline " + cfg.deadlineMs()
                 + " ms, heartbeat timeout " + cfg.heartbeatTimeoutMs() + " ms, session cap "
-                + cfg.sessionMaxInFlight() + " in flight");
+                + cfg.sessionMaxInFlight() + " in flight, results to "
+                + (publisher == null ? "nowhere (--redis none)" : "redis " + cfg.redis() + " stream " + cfg.stream()));
         server.awaitTermination();
     }
 }

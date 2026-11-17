@@ -17,6 +17,10 @@ import io.grpc.ServerInterceptor;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -55,20 +59,35 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
     private final WorkerRegistry registry;
     private final Metrics metrics;
     private final Config cfg;
+    private final ResultPublisher publisher;   // null = not publishing
     private final AtomicLong sessionSeq = new AtomicLong();
+    /** Makes session ids unique across scheduler restarts (they are stored in Postgres). */
+    private final String instance = Long.toString(System.currentTimeMillis(), 36);
 
-    FrameStreamService(WorkerRegistry registry, Metrics metrics, Config cfg) {
+    FrameStreamService(WorkerRegistry registry, Metrics metrics, Config cfg, ResultPublisher publisher) {
         this.registry = registry;
         this.metrics = metrics;
         this.cfg = cfg;
+        this.publisher = publisher;
+    }
+
+    /** Short, stable device id from its token: the token itself is never logged or stored. */
+    static String deviceId(String token) {
+        if (token == null || token.isEmpty()) return "anonymous";
+        try {
+            byte[] h = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+            return "dev-" + HexFormat.of().formatHex(h, 0, 6);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Override
     public StreamObserver<Frame> stream(StreamObserver<FrameResult> out) {
         // The token is only recorded, not checked. Checking it belongs with real devices (Step 7).
         String token = DEVICE_TOKEN.get();
-        Session s = new Session("s" + sessionSeq.incrementAndGet(), out);
-        Log.info("session " + s.id + " opened (device token: " + (token == null || token.isEmpty() ? "none" : "present") + ")");
+        Session s = new Session("s-" + instance + "-" + sessionSeq.incrementAndGet(), deviceId(token), out);
+        Log.info("session " + s.id + " opened (device " + s.device + ")");
         return new StreamObserver<>() {
             @Override public void onNext(Frame frame) { s.dispatch(frame); }
             @Override public void onError(Throwable t) { s.clientGone(t); }
@@ -87,6 +106,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
     /** One Android app connection. */
     private final class Session {
         final String id;
+        final String device;
         private final StreamObserver<FrameResult> out;
         private final AtomicInteger pending = new AtomicInteger();
         private final AtomicBoolean halfClosed = new AtomicBoolean();
@@ -95,8 +115,9 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         private final AtomicLong received = new AtomicLong();
         private final AtomicLong answered = new AtomicLong();
 
-        Session(String id, StreamObserver<FrameResult> out) {
+        Session(String id, String device, StreamObserver<FrameResult> out) {
             this.id = id;
+            this.device = device;
             this.out = out;
         }
 
@@ -196,6 +217,10 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             final int backendMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             final FrameResult result = r.toBuilder().setBackendMs(backendMs).build();
             metrics.record(result.getStatus(), backendMs);
+            // A copy for the Python control plane. Non-blocking: never delays the answer below.
+            if (publisher != null) {
+                publisher.publish(result, device, System.currentTimeMillis() - backendMs);
+            }
             if (!gone) {
                 // StreamObserver is not thread-safe: worker callbacks arrive on several threads.
                 synchronized (out) {

@@ -111,7 +111,7 @@ def main():
     images = sorted(glob.glob("testdata/*/*.png") + glob.glob("testdata/*/*.jpg"))
 
     sched = Proc([SCHEDULER, "--port", str(SCHED_PORT), "--deadline-ms", "300",
-                  "--heartbeat-timeout-ms", "3000", "--report-seconds", "5"], "scheduler")
+                  "--heartbeat-timeout-ms", "3000", "--report-seconds", "5", "--redis", "none"], "scheduler")
     if not sched.wait_for("READY"):
         sys.exit("scheduler did not start:\n" + "\n".join(sched.lines))
     print("scheduler started:", sched.lines[-1].split("] ")[-1], "\n")
@@ -138,6 +138,18 @@ def main():
             j = json.loads(line)
             expected[j["file"]] = j["detections"]
     got = [json.loads(l) for l in client("images", *images).splitlines() if l.strip()]
+    # CORRECTNESS, not speed: a frame that missed the 300 ms deadline (hot CPU) is resent, up to
+    # 3 times, so the comparison is about results. How many needed a resend is reported.
+    resent = 0
+    for k, g in enumerate(got):
+        tries = 0
+        while g["status"] == "DROPPED_DEADLINE" and tries < 3:
+            g = json.loads(client("images", g["file"]).splitlines()[0])
+            tries += 1
+            resent += 1
+        got[k] = g
+    if resent:
+        print(f"     {resent} frame(s) missed the deadline and were resent")
     same, n_dets, overhead = True, 0, []
     for g in got:
         exp = expected[g["file"]]

@@ -1,8 +1,9 @@
 # AR Glasses Detection: Architecture (Stream-Only, v1)
 
-Status: **Steps 0–5 built and tested**: shared contract, C++ inference workers, Java
-scheduler with N workers (routing, retries, failover, per-session cap), benchmark.
-Python control plane and Android app not started yet.
+Status: **Steps 0–6 built and tested**: shared contract, C++ inference workers, Java
+scheduler with N workers (routing, retries, failover, per-session cap), benchmark, and the
+Python control plane (Redis Stream → Postgres, rule engine, REST API).
+The Android app is not started yet.
 Progress and results per step: see `ROADMAP.md`.
 
 This is the architecture for the first project idea, **Stream-Only** (see `README-AR.md`).
@@ -105,8 +106,12 @@ heartbeats (`WorkerControl`).
   once, so one buggy client can't starve the others.
 - **Device token:** read from the `authorization` header, recorded, not checked yet (Step 7).
 - **Fast path:** the result goes straight back to the Android app on the same stream.
-- **Async copy (Step 6):** will publish every result to Redis Streams for the Python control
-  plane, never waiting on it; if Redis is down, the fast path keeps working.
+- **Async copy to Redis:** every result goes into a bounded memory buffer (10,000) and one
+  background thread writes the buffer to the Redis Stream `ar:results` in batches. The fast path
+  never waits: Redis down → results wait in the buffer (tested: nothing lost over a 4 s outage);
+  buffer full → oldest dropped and counted. `--redis none` turns it off.
+- **Identity:** session ids are unique across scheduler restarts; the device id is a hash of the
+  device token (`dev-xxxxxxxxxxxx`), the token itself is never logged or published.
 - **Metrics:** every 5 s: frames/s, counts per status, retries, backend p50/p95/p99, and per
   worker: health, frames sent, in flight, average inference time.
 - **Tests:** 9 unit tests on the routing rules (fake clock), end-to-end suites for Steps 4 and 5.
@@ -147,18 +152,34 @@ heartbeats (`WorkerControl`).
 - **Output format** (same as soufiane-easy):
   `{label, confidence, x1, y1, x2, y2, model}`, boxes normalized to 0–1.
 
-### 3.4 Python control plane (FastAPI)
+### 3.4 Python control plane ✅ built (Step 6)
 
-- **Consumes** results from Redis Streams through a consumer group.
-- **Rule engine:** ported from soufiane-easy (not copied). It applies three filters in order:
+`control-python/`: SQLAlchemy 2 + Alembic + psycopg 3, redis-py, FastAPI. Two separate
+processes, so a slow API request can never delay storing results:
+
+- **Consumer** (`python -m ar_control.consumer`):
+  - Reads `ar:results` through a Redis **consumer group** (several consumers could share it).
+  - One Postgres transaction per batch (up to 200 results), **acknowledged only after commit**:
+    after a crash, unacknowledged results are processed again; the unique
+    `(session_id, frame_id)` stores each one once. At-least-once delivery, exactly-once storage.
+  - Recreates its group if Redis restarted empty; skips (and counts) malformed entries so one
+    bad message can't block the stream; retries with back-off when Redis or Postgres is down.
+- **Rule engine** (ported from soufiane-easy, logic not code), in order:
   1. threshold: `confidence >= rule.min_confidence`
   2. quorum: at least `min_count` hits in one frame
-  3. cooldown: nothing from this rule for N seconds, per (rule, device)
-- **Storage:** detections and alerts in Postgres.
-- **REST API:** history (detections, alerts) and config (enabled models, per-model
-  confidence thresholds, rules).
-- It is **off the hot path**: it can be slow or even down without breaking the popup on
-  the glasses.
+  3. cooldown: nothing from this rule for N seconds, **per (rule, device)**
+  - Time = when the scheduler **received** the frame, so a backlog processed after an outage
+    raises the same alerts it would have raised live.
+  - Rules reloaded from the database every 5 s (the API edits them). Cold start reads the last
+    alert from the database (no re-announcing after a restart).
+- **Storage** (Postgres, migrations by Alembic): `frame` (every result, any status),
+  `detection` (OK frames), `alert_rule`, `alert` (kept when its rule is deleted).
+- **REST API** (`uvicorn ar_control.api:app`, port 8090): `/rules` CRUD with validation,
+  `/alerts` (+ idempotent `/ack`, `/summary`), `/detections`, `/stats` (status counts,
+  latency percentiles, per-worker share), `/health` (database, Redis, consumer pending/lag).
+  A `/config` endpoint is left for Step 7, when something reads it.
+- It is **off the hot path**: tested by killing Redis and the consumer mid-stream; the popup's
+  fast path was unaffected and no result was lost.
 
 ---
 
@@ -169,7 +190,7 @@ heartbeats (`WorkerControl`).
 | Android app ↔ Java scheduler | gRPC two-way streaming | One stream per device, low overhead, works on Android (grpc-okhttp) |
 | Java scheduler → C++ workers | gRPC, one call per frame | Fast, typed, easy to time; a gRPC deadline on every call |
 | C++ workers → Java scheduler | gRPC heartbeat, one small call per second | A dead worker simply stops calling; workers reconnect by themselves |
-| Java scheduler → Python | Redis Streams | Light enough for an 8 GB machine. Could move to Kafka later |
+| Java scheduler → Python | Redis Stream `ar:results` + consumer group | Light enough for an 8 GB machine; consumer groups give at-least-once delivery. Entry = protobuf `FrameResult` + `device` + `received_ms`. Could move to Kafka later |
 | All of them | **One shared `.proto` contract** | Kotlin, Java, C++ and Python all generate their code from the same definition |
 
 The contract is `proto/ar/v1/detection.proto` (package `ar.v1`):
@@ -199,7 +220,7 @@ AR/
   scheduler-java/   ← Java scheduler (Gradle)                            ✅
   scripts/          ← start-workers.sh / stop-workers.sh                ✅
   bench/            ← Step 5 benchmark results + graph                  ✅
-  control-python/   ← Step 6
+  control-python/   ← Python control plane (consumer, rules, API, migrations, tests) ✅
   android-app/      ← Step 7
 ```
 
@@ -211,9 +232,9 @@ deployment, any Linux server. The source code stays in the Windows folder
 |---|---|---|
 | C++ worker ✅ | WSL Ubuntu | `apt`: build-essential, cmake, ninja-build, libgrpc++-dev, protobuf-compiler-grpc, libprotobuf-dev, protobuf-compiler, libopencv-{core,imgproc,imgcodecs}-dev (~560 MB). ONNX Runtime 1.32 Linux in `~/ar-deps/onnxruntime`. Build output in `~/ar-build/worker-cpp` |
 | Java scheduler ✅ | WSL Ubuntu | `apt`: openjdk-21-jdk-headless (~300 MB). Gradle 9.9.1 wrapper; gRPC-Java 1.85.1, protobuf 4.36.2, JUnit 6.1.3 in `~/.gradle` (~400 MB) |
-| Python tools / control plane | WSL Ubuntu | Python 3.12, venv in `~/ar-venv` (grpcio, OpenCV, matplotlib; ~370 MB) |
-| Redis | WSL Ubuntu | `apt`: redis-server (~8 MB) |
-| Postgres | WSL Ubuntu (recommended) | `apt`: postgresql (~175 MB). A Postgres 15 also runs natively on Windows, but reaching it from WSL needs extra network setup |
+| Python tools / control plane ✅ | WSL Ubuntu | Python 3.12, venv in `~/ar-venv` (grpcio, OpenCV, matplotlib, FastAPI, SQLAlchemy, Alembic, psycopg, redis-py, pytest; ~480 MB) |
+| Redis ✅ | WSL Ubuntu | `apt`: redis-server 7 (~8 MB), started by systemd |
+| Postgres ✅ | WSL Ubuntu | `apt`: PostgreSQL 16 (~175 MB), started by systemd. Role `ar` (local dev password `ar`), databases `ar` and `ar_test` (tests only). The Postgres 15 on Windows is not used |
 
 **Why everything in WSL, not split between Windows and WSL:** this PC runs **Windows 10**,
 where WSL2 uses a NAT network. Windows → WSL through `127.0.0.1` works, but **WSL → Windows
@@ -257,6 +278,9 @@ More workers or threads than the 4 physical cores only make each inference slowe
 - One pair of glasses at 8 fps fits the 300 ms deadline.
 - Two pairs at the same time need either a 400 ms deadline (96% in time) or a bigger machine.
   **Open decision** (section 8).
+- **Sustained load throttles this laptop hard** (measured in Step 6): after ~30 min of
+  continuous load, 2 sessions got only ~24% of frames within 300 ms (74% when cooler). For long
+  demos: one pair of glasses, a 400 ms deadline, or a machine with real cooling.
 
 That's fine for a fixed popup. It's too slow for boxes drawn on objects, because the
 wearer's head has moved by the time the result arrives. That's why boxes are left for

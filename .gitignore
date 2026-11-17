@@ -26,3 +26,7 @@ cmake-build-*/
 
 # Gradle
 .gradle/
+
+# Python control plane: code generated from the .proto at import
+control-python/ar_control/_gen/
+.pytest_cache/

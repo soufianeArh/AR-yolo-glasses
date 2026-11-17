@@ -23,6 +23,17 @@ final class Metrics {
     private final LongAdder windowRetries = new LongAdder();
     private final Map<String, Long> lastSent = new HashMap<>();  // per worker, for per-window deltas
     private long windowStartNanos = System.nanoTime();
+    private ResultPublisher publisher;   // null = not publishing
+
+    void setPublisher(ResultPublisher publisher) {
+        this.publisher = publisher;
+    }
+
+    private String publisherState() {
+        if (publisher == null) return "";
+        return " | redis published=" + publisher.published.get() + " buffered=" + publisher.buffered()
+                + " dropped=" + publisher.droppedBufferFull.get();
+    }
 
     Metrics() {
         for (ResultStatus s : ResultStatus.values()) {
@@ -76,8 +87,9 @@ final class Metrics {
                     .append(" inflight ").append(w.inFlight.get())
                     .append(" avg ").append(Math.round(w.avgInferMs)).append("ms]");
         }
-        Log.info(String.format("last %.1fs: %d frames (%.1f fps)%s | backend p50=%s p95=%s p99=%s ms |%s",
-                seconds, frames, frames / seconds, statuses, pct(lat, 50), pct(lat, 95), pct(lat, 99), workers));
+        Log.info(String.format("last %.1fs: %d frames (%.1f fps)%s | backend p50=%s p95=%s p99=%s ms |%s%s",
+                seconds, frames, frames / seconds, statuses, pct(lat, 50), pct(lat, 95), pct(lat, 99), workers,
+                publisherState()));
     }
 
     String totals() {
@@ -86,7 +98,8 @@ final class Metrics {
             if (n.sum() > 0) sb.append(' ').append(s).append('=').append(n.sum());
         });
         if (retries.sum() > 0) sb.append(" retries=").append(retries.sum());
-        return sb.length() == 0 ? " (no frames)" : sb.toString();
+        if (sb.length() == 0) sb.append(" (no frames)");
+        return sb + publisherState();
     }
 
     private static String pct(List<Integer> sorted, int p) {

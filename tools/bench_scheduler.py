@@ -43,7 +43,7 @@ def pct(vals, p):
 
 def run_config(workers, threads, seconds):
     sched = Proc([SCHEDULER, "--port", str(SCHED_PORT), "--deadline-ms", "1000", "--report-seconds", "0",
-                  "--session-max-in-flight", "2"], "scheduler")
+                  "--session-max-in-flight", "2", "--redis", "none"], "scheduler")
     if not sched.wait_for("READY"):
         sys.exit("scheduler did not start")
     procs = []
