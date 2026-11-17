@@ -47,8 +47,21 @@ def ultralytics_results(images, conf, iou):
     return out
 
 
-def cpp_results(images, conf, iou):
-    cmd = [CLI, "--model", MODEL, "--conf", str(conf), "--iou", str(iou), *images]
+def wsl_path(win_path):
+    drive, rest = os.path.splitdrive(os.path.abspath(win_path))
+    return f"/mnt/{drive[0].lower()}{rest.replace(os.sep, '/')}"
+
+
+def cpp_results(images, conf, iou, wsl=False):
+    if wsl:
+        # Linux build inside WSL Ubuntu (see worker-cpp/CMakeLists.txt). Image paths are
+        # relative to the AR folder, so they work unchanged on both sides.
+        home = subprocess.run(["wsl", "-d", "Ubuntu", "--exec", "printenv", "HOME"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        cmd = ["wsl", "-d", "Ubuntu", "--cd", wsl_path(ROOT), "--exec", f"{home}/ar-build/worker-cpp/worker-cli",
+               "--model", "models/yolov8n.onnx", "--conf", str(conf), "--iou", str(iou), *images]
+    else:
+        cmd = [CLI, "--model", MODEL, "--conf", str(conf), "--iou", str(iou), *images]
     lines = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.splitlines()
     return {json.loads(line)["file"]: json.loads(line) for line in lines if line.strip()}
 
@@ -75,6 +88,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--conf", type=float, default=0.4)
     ap.add_argument("--iou", type=float, default=0.5)
+    ap.add_argument("--wsl", action="store_true", help="test the Linux build inside WSL Ubuntu")
     args = ap.parse_args()
 
     images = sorted(glob.glob(os.path.join(ROOT, "testdata", "*", "*.png")) +
@@ -83,7 +97,8 @@ def main():
     os.chdir(ROOT)
 
     ref = ultralytics_results(images, args.conf, args.iou)
-    got = cpp_results(images, args.conf, args.iou)
+    got = cpp_results(images, args.conf, args.iou, wsl=args.wsl)
+    print("C++ worker:", "Linux build in WSL" if args.wsl else "Windows build")
 
     all_ok, worst_conf, worst_box = True, 0.0, 0.0
     print(f"{'image':42} {'ultra':>5} {'c++':>5} {'max dconf':>10} {'max dbox px':>12}  result")

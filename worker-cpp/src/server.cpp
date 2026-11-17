@@ -82,8 +82,32 @@ struct WorkerState {
     std::mutex detector_mu;               // one inference at a time
     std::atomic<int> in_flight{0};        // running + waiting
     std::atomic<double> avg_infer_ms{0};  // moving average, read by the heartbeat thread
-    std::atomic<unsigned long long> served{0}, bad_frames{0}, rejected{0}, skipped_deadline{0};
+    std::atomic<unsigned long long> served{0}, bad_frames{0}, rejected{0}, skipped_deadline{0}, aborted{0};
+
+    // The call whose inference is running right now, watched by the deadline watcher.
+    std::mutex active_mu;
+    bool active = false;
+    std::chrono::system_clock::time_point active_deadline;
 };
+
+// Aborts the running inference once its call's deadline has passed.
+//
+// Without this, a frame nobody waits for anymore keeps the CPU busy until its inference ends,
+// and every frame queued behind it is delayed too (measured in Step 4). Polls every 5 ms:
+// cheap, and fine-grained enough next to ~100 ms inferences.
+void deadline_watcher(WorkerState& s) {
+    while (!g_stop) {
+        {
+            // Abort WHILE holding active_mu: the running call can only mark itself inactive (and
+            // the next call can only start) after we release it, so we can never hit the wrong run.
+            std::lock_guard<std::mutex> lk(s.active_mu);
+            if (s.active && std::chrono::system_clock::now() > s.active_deadline) {
+                s.detector->abort_current();  // repeated each poll until it lands: harmless
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
 
 // ------------------------------------------------------------------ InferenceWorker service
 
@@ -126,6 +150,20 @@ public:
             return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED, "deadline passed while queued");
         }
 
+        // Let the watcher abort this inference if the deadline passes while it runs.
+        {
+            std::lock_guard<std::mutex> alk(s_.active_mu);
+            s_.active = true;
+            s_.active_deadline = ctx->deadline();  // "infinite" when the caller set none
+        }
+        struct Inactive {
+            WorkerState& s;
+            ~Inactive() {
+                std::lock_guard<std::mutex> alk(s.active_mu);
+                s.active = false;
+            }
+        } inactive{s_};
+
         try {
             ar::StageTiming t;
             const auto& jpeg = frame->jpeg();
@@ -152,6 +190,9 @@ public:
             ++s_.bad_frames;
             result->set_status(pb::BAD_FRAME);
             result->set_error(e.what());
+        } catch (const ar::Aborted&) {
+            ++s_.aborted;
+            return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED, "inference aborted: deadline passed");
         } catch (const std::exception& e) {
             log(s_.opt.worker_id, std::string("inference failed: ") + e.what());
             return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
@@ -281,6 +322,7 @@ int main(int argc, char** argv) {
     std::signal(SIGBREAK, on_signal);  // Windows: Ctrl+Break, which a parent process can send to stop us cleanly
 #endif
 
+    std::thread watcher(deadline_watcher, std::ref(state));
     std::thread hb;
     if (!o.scheduler.empty()) hb = std::thread(heartbeat_loop, std::ref(state));
     else log(o.worker_id, "no scheduler configured, heartbeats off");
@@ -290,8 +332,10 @@ int main(int argc, char** argv) {
     log(o.worker_id, "shutting down");
     server->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(2));
     if (hb.joinable()) hb.join();
+    watcher.join();
     log(o.worker_id, "stopped. served=" + std::to_string(state.served) + " bad_frames=" +
                          std::to_string(state.bad_frames) + " rejected=" + std::to_string(state.rejected) +
-                         " skipped_deadline=" + std::to_string(state.skipped_deadline));
+                         " skipped_deadline=" + std::to_string(state.skipped_deadline) +
+                         " aborted=" + std::to_string(state.aborted));
     return 0;
 }

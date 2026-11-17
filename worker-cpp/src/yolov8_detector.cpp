@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <mutex>
 #include <numeric>
 #include <regex>
 #include <stdexcept>
@@ -98,7 +99,20 @@ struct YoloV8Detector::Impl {
     std::unique_ptr<Ort::Session> session;
     std::string input_name, output_name;
     Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // The run in progress, so another thread can terminate it (abort_current).
+    std::mutex run_mu;
+    Ort::RunOptions* current_run = nullptr;
+    bool abort_requested = false;
 };
+
+void YoloV8Detector::abort_current() {
+    std::lock_guard<std::mutex> lk(impl_->run_mu);
+    if (impl_->current_run != nullptr) {
+        impl_->current_run->SetTerminate();  // ONNX Runtime checks this flag between graph nodes
+        impl_->abort_requested = true;
+    }
+}
 
 YoloV8Detector::YoloV8Detector(YoloV8Config config) : impl_(std::make_unique<Impl>()), config_(std::move(config)) {
     if (config_.threads < 1) throw std::invalid_argument("threads must be >= 1");
@@ -199,7 +213,34 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
                                                     shape.size());
     const char* in_names[] = {impl_->input_name.c_str()};
     const char* out_names[] = {impl_->output_name.c_str()};
-    auto outputs = impl_->session->Run(Ort::RunOptions{nullptr}, in_names, &in, 1, out_names, 1);
+
+    // A fresh RunOptions per run, published so abort_current() can terminate THIS run only.
+    Ort::RunOptions run_options;
+    {
+        std::lock_guard<std::mutex> lk(impl_->run_mu);
+        impl_->current_run = &run_options;
+        impl_->abort_requested = false;
+    }
+    struct Unpublish {
+        Impl& impl;
+        ~Unpublish() {
+            std::lock_guard<std::mutex> lk(impl.run_mu);
+            impl.current_run = nullptr;
+        }
+    } unpublish{*impl_};
+
+    std::vector<Ort::Value> outputs;
+    try {
+        outputs = impl_->session->Run(run_options, in_names, &in, 1, out_names, 1);
+    } catch (const Ort::Exception&) {
+        bool aborted;
+        {
+            std::lock_guard<std::mutex> lk(impl_->run_mu);
+            aborted = impl_->abort_requested;
+        }
+        if (aborted) throw Aborted("inference aborted");
+        throw;
+    }
     const float* out = outputs[0].GetTensorData<float>();
     if (timing) timing->infer_ms = ms_since(t0);
 

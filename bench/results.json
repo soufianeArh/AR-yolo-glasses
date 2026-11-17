@@ -1,0 +1,439 @@
+[
+ {
+  "workers": 1,
+  "threads": 4,
+  "config": "1x4",
+  "sessions": 1,
+  "ok_fps": 7.22,
+  "answered": 109,
+  "dropped_on_client": 11,
+  "p50": 176,
+  "p95": 333,
+  "p99": 424,
+  "under_300": 92.7,
+  "under_400": 98.2,
+  "statuses": {
+   "OK": 109
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 1,
+  "threads": 4,
+  "config": "1x4",
+  "sessions": 2,
+  "ok_fps": 7.76,
+  "answered": 198,
+  "dropped_on_client": 42,
+  "p50": 299,
+  "p95": 406,
+  "p99": 454,
+  "under_300": 30.8,
+  "under_400": 55.6,
+  "statuses": {
+   "OK": 118,
+   "NO_WORKER": 80
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 1,
+  "threads": 6,
+  "config": "1x6",
+  "sessions": 1,
+  "ok_fps": 8.0,
+  "answered": 120,
+  "dropped_on_client": 0,
+  "p50": 120,
+  "p95": 128,
+  "p99": 141,
+  "under_300": 100.0,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 120
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 1,
+  "threads": 6,
+  "config": "1x6",
+  "sessions": 2,
+  "ok_fps": 8.88,
+  "answered": 202,
+  "dropped_on_client": 38,
+  "p50": 287,
+  "p95": 344,
+  "p99": 356,
+  "under_300": 40.1,
+  "under_400": 66.8,
+  "statuses": {
+   "OK": 135,
+   "NO_WORKER": 67
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 2,
+  "threads": 2,
+  "config": "2x2",
+  "sessions": 1,
+  "ok_fps": 7.88,
+  "answered": 119,
+  "dropped_on_client": 1,
+  "p50": 183,
+  "p95": 212,
+  "p99": 277,
+  "under_300": 99.2,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 119
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 2,
+  "threads": 2,
+  "config": "2x2",
+  "sessions": 2,
+  "ok_fps": 9.87,
+  "answered": 150,
+  "dropped_on_client": 90,
+  "p50": 336,
+  "p95": 415,
+  "p99": 447,
+  "under_300": 26.0,
+  "under_400": 90.0,
+  "statuses": {
+   "OK": 150
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 2,
+  "threads": 3,
+  "config": "2x3",
+  "sessions": 1,
+  "ok_fps": 7.95,
+  "answered": 120,
+  "dropped_on_client": 0,
+  "p50": 162,
+  "p95": 182,
+  "p99": 261,
+  "under_300": 99.2,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 120
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 2,
+  "threads": 3,
+  "config": "2x3",
+  "sessions": 2,
+  "ok_fps": 10.79,
+  "answered": 164,
+  "dropped_on_client": 76,
+  "p50": 305,
+  "p95": 381,
+  "p99": 478,
+  "under_300": 43.9,
+  "under_400": 97.6,
+  "statuses": {
+   "OK": 164
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 3,
+  "threads": 2,
+  "config": "3x2",
+  "sessions": 1,
+  "ok_fps": 7.88,
+  "answered": 119,
+  "dropped_on_client": 1,
+  "p50": 207,
+  "p95": 231,
+  "p99": 335,
+  "under_300": 98.3,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 119
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 3,
+  "threads": 2,
+  "config": "3x2",
+  "sessions": 2,
+  "ok_fps": 10.93,
+  "answered": 165,
+  "dropped_on_client": 75,
+  "p50": 261,
+  "p95": 381,
+  "p99": 464,
+  "under_300": 80.6,
+  "under_400": 96.4,
+  "statuses": {
+   "OK": 165
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 4,
+  "threads": 1,
+  "config": "4x1",
+  "sessions": 1,
+  "ok_fps": 5.26,
+  "answered": 80,
+  "dropped_on_client": 40,
+  "p50": 283,
+  "p95": 365,
+  "p99": 406,
+  "under_300": 76.2,
+  "under_400": 97.5,
+  "statuses": {
+   "OK": 80
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 4,
+  "threads": 1,
+  "config": "4x1",
+  "sessions": 2,
+  "ok_fps": 9.08,
+  "answered": 138,
+  "dropped_on_client": 102,
+  "p50": 349,
+  "p95": 554,
+  "p99": 659,
+  "under_300": 4.3,
+  "under_400": 76.1,
+  "statuses": {
+   "OK": 138
+  },
+  "repeat": 1
+ },
+ {
+  "workers": 4,
+  "threads": 1,
+  "config": "4x1",
+  "sessions": 1,
+  "ok_fps": 5.26,
+  "answered": 80,
+  "dropped_on_client": 40,
+  "p50": 282,
+  "p95": 323,
+  "p99": 380,
+  "under_300": 86.2,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 80
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 4,
+  "threads": 1,
+  "config": "4x1",
+  "sessions": 2,
+  "ok_fps": 9.74,
+  "answered": 148,
+  "dropped_on_client": 92,
+  "p50": 348,
+  "p95": 435,
+  "p99": 471,
+  "under_300": 2.7,
+  "under_400": 89.2,
+  "statuses": {
+   "OK": 148
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 3,
+  "threads": 2,
+  "config": "3x2",
+  "sessions": 1,
+  "ok_fps": 7.68,
+  "answered": 116,
+  "dropped_on_client": 4,
+  "p50": 215,
+  "p95": 260,
+  "p99": 282,
+  "under_300": 100.0,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 116
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 3,
+  "threads": 2,
+  "config": "3x2",
+  "sessions": 2,
+  "ok_fps": 10.79,
+  "answered": 163,
+  "dropped_on_client": 77,
+  "p50": 284,
+  "p95": 384,
+  "p99": 434,
+  "under_300": 67.5,
+  "under_400": 96.3,
+  "statuses": {
+   "OK": 163
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 2,
+  "threads": 3,
+  "config": "2x3",
+  "sessions": 1,
+  "ok_fps": 7.73,
+  "answered": 116,
+  "dropped_on_client": 4,
+  "p50": 183,
+  "p95": 258,
+  "p99": 310,
+  "under_300": 98.3,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 116
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 2,
+  "threads": 3,
+  "config": "2x3",
+  "sessions": 2,
+  "ok_fps": 9.01,
+  "answered": 138,
+  "dropped_on_client": 102,
+  "p50": 340,
+  "p95": 621,
+  "p99": 935,
+  "under_300": 24.6,
+  "under_400": 86.2,
+  "statuses": {
+   "OK": 137,
+   "DROPPED_DEADLINE": 1
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 2,
+  "threads": 2,
+  "config": "2x2",
+  "sessions": 1,
+  "ok_fps": 7.75,
+  "answered": 117,
+  "dropped_on_client": 3,
+  "p50": 215,
+  "p95": 245,
+  "p99": 292,
+  "under_300": 99.1,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 117
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 2,
+  "threads": 2,
+  "config": "2x2",
+  "sessions": 2,
+  "ok_fps": 9.08,
+  "answered": 139,
+  "dropped_on_client": 101,
+  "p50": 373,
+  "p95": 454,
+  "p99": 487,
+  "under_300": 3.6,
+  "under_400": 71.2,
+  "statuses": {
+   "OK": 139
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 1,
+  "threads": 6,
+  "config": "1x6",
+  "sessions": 1,
+  "ok_fps": 5.5,
+  "answered": 83,
+  "dropped_on_client": 37,
+  "p50": 243,
+  "p95": 626,
+  "p99": 811,
+  "under_300": 63.9,
+  "under_400": 79.5,
+  "statuses": {
+   "OK": 83
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 1,
+  "threads": 6,
+  "config": "1x6",
+  "sessions": 2,
+  "ok_fps": 6.84,
+  "answered": 181,
+  "dropped_on_client": 59,
+  "p50": 333,
+  "p95": 705,
+  "p99": 800,
+  "under_300": 18.8,
+  "under_400": 43.1,
+  "statuses": {
+   "OK": 106,
+   "NO_WORKER": 75
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 1,
+  "threads": 4,
+  "config": "1x4",
+  "sessions": 1,
+  "ok_fps": 7.15,
+  "answered": 108,
+  "dropped_on_client": 12,
+  "p50": 211,
+  "p95": 285,
+  "p99": 345,
+  "under_300": 96.3,
+  "under_400": 100.0,
+  "statuses": {
+   "OK": 108
+  },
+  "repeat": 2
+ },
+ {
+  "workers": 1,
+  "threads": 4,
+  "config": "1x4",
+  "sessions": 2,
+  "ok_fps": 7.76,
+  "answered": 191,
+  "dropped_on_client": 49,
+  "p50": 330,
+  "p95": 420,
+  "p99": 519,
+  "under_300": 13.6,
+  "under_400": 56.5,
+  "statuses": {
+   "OK": 118,
+   "NO_WORKER": 73
+  },
+  "repeat": 2
+ }
+]

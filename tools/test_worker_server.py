@@ -14,7 +14,8 @@ starts worker-server, then checks:
   8. clean shutdown   -> final counters printed
 
 Usage (from the AR folder):
-  tools/.venv/Scripts/python tools/test_worker_server.py
+  Windows:     tools/.venv/Scripts/python tools/test_worker_server.py
+  WSL / Linux: AR_BIN=~/ar-build/worker-cpp ~/ar-venv/bin/python tools/test_worker_server.py
 """
 import concurrent.futures as cf
 import glob
@@ -32,7 +33,9 @@ import grpc
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(ROOT, "tools", "_gen")
 MODEL = os.path.join(ROOT, "models", "yolov8n.onnx")
-BIN = os.path.join(ROOT, "worker-cpp", "build", "Release")
+# Where the built programs are. Windows: worker-cpp/build/Release.
+# Linux / WSL: the build folder from worker-cpp/CMakeLists.txt, e.g. AR_BIN=~/ar-build/worker-cpp
+BIN = os.environ.get("AR_BIN") or os.path.join(ROOT, "worker-cpp", "build", "Release")
 SERVER = os.path.join(BIN, "worker-server.exe" if os.name == "nt" else "worker-server")
 CLI = os.path.join(BIN, "worker-cli.exe" if os.name == "nt" else "worker-cli")
 
@@ -229,6 +232,9 @@ def main():
     m = re.search(r"skipped_deadline=(\d+)", final)
     check("queued frames past their deadline were skipped, not computed",
           bool(m) and int(m.group(1)) >= 1, f"skipped_deadline={m.group(1) if m else '?'}")
+    m = re.search(r"aborted=(\d+)", final)
+    check("a running inference past its deadline was aborted halfway",
+          bool(m) and int(m.group(1)) >= 1, f"aborted={m.group(1) if m else '?'}")
     sched.stop(0)
 
     print("\nworker log:")

@@ -1,0 +1,85 @@
+// Java scheduler: receives frames from the Android app, sends each one to a C++ worker,
+// returns the result on the same stream. Workers register themselves through heartbeats.
+//
+// Build + run (inside WSL Ubuntu, from AR/scheduler-java):
+//   ./gradlew installDist
+//   build/install/scheduler-java/bin/scheduler-java --port 50051
+
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.google.protobuf' version '0.10.1'
+}
+
+group = 'com.soufiane.ar'
+version = '0.1.0'
+
+def grpcVersion = '1.85.1'
+def protobufVersion = '4.36.2'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+
+    testImplementation platform('org.junit:junit-bom:6.1.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "io.grpc:grpc-inprocess:${grpcVersion}"
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat = 'full'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:all', '-Xlint:-processing', '-Xlint:-serial']
+}
+
+// The shared contract lives outside this project, in AR/proto.
+sourceSets {
+    main {
+        proto {
+            srcDir '../proto'
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${protobufVersion}"
+    }
+    plugins {
+        grpc {
+            artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+        }
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.plugins {
+                grpc {}
+            }
+        }
+    }
+}
+
+// Generated code is not ours to lint.
+tasks.named('compileJava') {
+    options.compilerArgs += ['-Xlint:-deprecation', '-Xlint:-rawtypes', '-Xlint:-unchecked', '-Xlint:-cast']
+}
+
+application {
+    mainClass = 'com.soufiane.ar.scheduler.Main'
+    applicationDefaultJvmArgs = ['-XX:+UseZGC', '-Xmx512m']
+}

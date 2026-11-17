@@ -35,6 +35,7 @@ public:
     YoloV8Detector& operator=(const YoloV8Detector&) = delete;
 
     std::vector<Detection> detect(const cv::Mat& bgr, StageTiming* timing = nullptr) override;
+    void abort_current() override;
 
     const std::string& name() const override { return config_.name; }
     const std::vector<std::string>& class_names() const override { return names_; }

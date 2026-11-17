@@ -1,6 +1,9 @@
 # AR Glasses Detection: Architecture (Stream-Only, v1)
 
-Status: **design / discussion**. Nothing here is implemented yet.
+Status: **Steps 0–5 built and tested**: shared contract, C++ inference workers, Java
+scheduler with N workers (routing, retries, failover, per-session cap), benchmark.
+Python control plane and Android app not started yet.
+Progress and results per step: see `ROADMAP.md`.
 
 This is the architecture for the first project idea, **Stream-Only** (see `README-AR.md`).
 The upgrade, **Stream + Local Model**, reuses this same backend and adds on-device inference later.
@@ -40,7 +43,7 @@ with a copy of every result sent **async** to the Python control plane.
 └───────────────┬─────────────────▲─────────────────┘
                 │ gRPC stream      │ results
                 ▼  (Wi-Fi)         │
-┌────────── Backend (one machine, native processes) ─┐
+┌──── Backend (one machine, Linux: WSL Ubuntu in dev) ┐
 │                                                     │
 │  Java scheduler ───gRPC──► C++ worker 1  (ONNX)    │
 │   - device sessions        C++ worker 2  (ONNX)    │
@@ -65,7 +68,7 @@ with a copy of every result sent **async** to the Python control plane.
 
 - **Capture:** CameraX during development, the Goolton SDK camera on the glasses.
 - **Pre-process on the device:** shrink each frame to about 640px and compress it to JPEG
-  (around 40 KB), so less data travels over Wi-Fi.
+  (around 40–50 KB), so less data travels over Wi-Fi.
 - **Backpressure:** at most **1–2 frames in flight**. If the backend is slow, drop new
   frames instead of queuing them. Newest frame wins.
 - **Display:** a fixed-position popup in the top-right corner.
@@ -74,40 +77,75 @@ with a copy of every result sent **async** to the Python control plane.
   - This smoothing happens in the Android app, so the popup stays steady without
     waiting for the Python rule engine.
 - **Transport:** one gRPC two-way stream to the Java scheduler per device session.
-- **Identity:** a simple per-device token, sent when the stream opens.
+- **Identity:** a simple per-device token, sent in the gRPC `authorization` header when the
+  stream opens.
 
-### 3.2 Java scheduler (the core of the project)
+### 3.2 Java scheduler (the core of the project) ✅ built (Steps 4–5)
 
-Plain Java 21 with grpc-java, using virtual threads. Spring isn't needed on the hot path.
+Java 21 with plain grpc-java (no Spring), virtual threads, Gradle. Runs in WSL Ubuntu.
+One gRPC port (default 50051) serves both the Android app (`FrameStream`) and the workers'
+heartbeats (`WorkerControl`).
 
-- **Sessions:** accepts the gRPC streams from the Android app, one session per device.
-- **Worker registry:** a live table of every C++ worker: whether it's busy, its queue depth,
-  its recent latency and its last heartbeat.
-- **Scheduling policy (v1):**
-  - Send each frame to the **least-loaded** healthy worker.
-  - Give each frame a **deadline** of about 300 ms. A frame that misses it is dropped,
-    never processed late.
-  - **Failover:** a worker that misses its heartbeats is marked unhealthy and gets no new
-    frames. Its in-flight frame is retried once on another worker.
-- **Fast path:** sends the result straight back to the Android app on the same stream.
-- **Async copy:** publishes every result to Redis Streams for the Python control plane.
-  It never waits on this; if Redis is down, the fast path keeps working.
-- **Metrics:** frames per second, queue depth and latency percentiles (p50/p95/p99), both
-  per worker and per session.
+- **Sessions:** one per Android app stream. A session closes only after every pending result
+  went out. Results may go back out of order; the Android app matches them by `frame_id`.
+- **Worker registry:** built only from heartbeats. The **first heartbeat registers a worker**
+  (address, models, threads), so no worker list is configured. The scheduler connects to a
+  worker as soon as it registers, and reconnects immediately (skipping gRPC's back-off) when a
+  heartbeat arrives after a failure.
+- **Health:** unhealthy after 3 s without heartbeats. A worker found **unreachable** during a
+  call is **suspended at once**; its next heartbeat makes it healthy again.
+- **Routing:** the healthy worker with the **fewest frames in flight**; on a tie, the one picked
+  longest ago. Pick + reservation are one atomic step. The in-flight count is accurate because
+  workers abort an inference when its deadline passes (3.3).
+- **Deadline:** 300 ms per frame by default (`--deadline-ms`), from the moment the scheduler
+  receives it. Past it → `DROPPED_DEADLINE`, never answered late. See section 6 for 300 vs 400 ms.
+- **Retry:** on queue full (`RESOURCE_EXHAUSTED`) or unreachable (`UNAVAILABLE`), **one** retry
+  on another worker if at least 50 ms of the deadline is left. Never on a deadline miss.
+- **Per-session cap:** 2 frames in flight (`--session-max-in-flight`); more → `SESSION_LIMIT` at
+  once, so one buggy client can't starve the others.
+- **Device token:** read from the `authorization` header, recorded, not checked yet (Step 7).
+- **Fast path:** the result goes straight back to the Android app on the same stream.
+- **Async copy (Step 6):** will publish every result to Redis Streams for the Python control
+  plane, never waiting on it; if Redis is down, the fast path keeps working.
+- **Metrics:** every 5 s: frames/s, counts per status, retries, backend p50/p95/p99, and per
+  worker: health, frames sent, in flight, average inference time.
+- **Tests:** 9 unit tests on the routing rules (fake clock), end-to-end suites for Steps 4 and 5.
 
-### 3.3 C++ inference workers
+### 3.3 C++ inference workers ✅ built (Steps 2–3)
 
-- Each worker is a small **gRPC server**: it takes in a JPEG and returns a list of detections.
-- **Engine:** ONNX Runtime, CPU only.
-- **Models:** YOLOv8n exported to ONNX from the same weights used in soufiane-easy:
-  - `default`: COCO yolov8n (person, cow, bird, car…)
-  - `fire`: `fire.pt` (classes `fire`, `smoke`)
-- **Scaling:** several worker processes, each with 2 intra-op threads, sized to the
-  8-core machine. This is where the multi-core throughput work happens: measure FPS and
-  latency per worker, and how they change as you add workers.
-- **Health:** sends heartbeats and its current load to the Java scheduler.
+- Each worker is a small **gRPC server** (`worker-server`): it takes in a JPEG and returns a
+  list of detections.
+- **Engine:** ONNX Runtime 1.32, CPU only. **OpenCV** for JPEG decode and resize.
+- **Model in v1:** `default` = COCO **YOLOv8n**, exported to ONNX (fixed 640×640 input) from
+  the same weights used in soufiane-easy. `fire` is left out of v1 (a weak fit for AR, never
+  tested on real fire, AGPL license). Class names are read from the `.onnx` file itself, so
+  another YOLOv8 export works without code changes.
+- **Pre/post-processing reproduces Ultralytics exactly:** letterbox (gray 114 padding),
+  per-class NMS (IoU 0.5), confidence threshold 0.4, boxes normalized to 0–1. Verified:
+  0.00000 confidence difference and 0.000 px box difference on all test images, on both the
+  Windows build (OpenCV 5.0) and the Linux build (OpenCV 4.6).
+- **Concurrency model:** **one inference at a time per worker process.**
+  - Up to `--max-queue` calls (default 2) wait; beyond that the worker answers
+    `RESOURCE_EXHAUSTED` right away.
+  - A call whose deadline passed while it waited is **skipped, not computed**.
+  - A call whose deadline passes **during** its inference is **aborted halfway** (ONNX Runtime
+    `RunOptions::SetTerminate`, from a watcher thread polling every 5 ms). Either way, no CPU is
+    spent on answers nobody is waiting for.
+  - Scaling = **more worker processes**. Measured best on this laptop: **3 workers × 2 threads**
+    (section 6).
+- **Failure handling:** frame-level problems (bad image, unknown model) → gRPC OK with
+  `FrameResult.status = BAD_FRAME`. Capacity/transport problems (queue full, deadline,
+  crash) → a gRPC error status.
+- **Health:** a heartbeat every second to the Java scheduler. If the scheduler is down, the
+  worker keeps serving and keeps retrying; heartbeats resume when it comes back.
+- **Hardware measured (Step 2):** Intel i7-8550U, **4 cores / 8 threads, 15 W laptop CPU**.
+  One worker: ~6 FPS with 2 threads, ~10 FPS with 6 threads. 8 threads is slower than 6.
+  Sustained runs are 30–50% slower than cold runs (the CPU throttles as it heats), so every
+  measurement needs repeated runs and p95, not one number.
+- **Build:** CMake, same `CMakeLists.txt` for Linux (GCC) and Windows (MSVC). The main build
+  is **Linux, in WSL Ubuntu**, with gRPC/protobuf/OpenCV from `apt` (see section 5).
 - **Output format** (same as soufiane-easy):
-  `{label, confidence, box: (x1, y1, x2, y2)}`
+  `{label, confidence, x1, y1, x2, y2, model}`, boxes normalized to 0–1.
 
 ### 3.4 Python control plane (FastAPI)
 
@@ -129,53 +167,96 @@ Plain Java 21 with grpc-java, using virtual threads. Spring isn't needed on the 
 | Link | Choice | Why |
 |---|---|---|
 | Android app ↔ Java scheduler | gRPC two-way streaming | One stream per device, low overhead, works on Android (grpc-okhttp) |
-| Java scheduler ↔ C++ workers | gRPC | Fast, typed, easy to time |
+| Java scheduler → C++ workers | gRPC, one call per frame | Fast, typed, easy to time; a gRPC deadline on every call |
+| C++ workers → Java scheduler | gRPC heartbeat, one small call per second | A dead worker simply stops calling; workers reconnect by themselves |
 | Java scheduler → Python | Redis Streams | Light enough for an 8 GB machine. Could move to Kafka later |
 | All of them | **One shared `.proto` contract** | Kotlin, Java, C++ and Python all generate their code from the same definition |
 
-Main messages in the `.proto` contract (draft):
+The contract is `proto/ar/v1/detection.proto` (package `ar.v1`):
 
-- `Frame { session_id, frame_id, captured_at_ms, jpeg_bytes, models[] }`
-- `Detection { label, confidence, x1, y1, x2, y2 }`
-- `FrameResult { session_id, frame_id, worker_id, detections[], infer_ms, total_ms }`
-- `WorkerHeartbeat { worker_id, busy, queue_depth, avg_infer_ms }`
+- `Frame { session_id, frame_id, captured_at_ms, jpeg, models[] }`
+- `Detection { label, confidence, x1, y1, x2, y2, model }` (boxes normalized 0–1)
+- `FrameResult { session_id, frame_id, status, detections[], worker_id, infer_ms, backend_ms, error }`
+- `ResultStatus`: `OK`, `DROPPED_DEADLINE`, `WORKER_FAILED`, `NO_WORKER` (no healthy worker,
+  or every worker tried had a full queue), `BAD_FRAME`, `SESSION_LIMIT` (added in Step 5)
+- `WorkerHeartbeat { worker_id, address, models[], busy, queue_depth, avg_infer_ms, threads }`
+- Services: `FrameStream.Stream` (Android app ↔ Java scheduler), `InferenceWorker.Detect`
+  (Java scheduler → C++ worker), `WorkerControl.Heartbeat` (C++ worker → Java scheduler)
 
 ---
 
-## 5. Project folder layout
+## 5. Project folder layout and runtime environment
 
 ```
 AR/
-  proto/            ← shared contract (frame, detection, worker health)
-  android-app/      ← Kotlin
-  scheduler-java/
-  worker-cpp/
-  control-python/
-  scripts/          ← start/stop scripts (launch N C++ workers, scheduler, python)
+  proto/            ← shared contract                                   ✅
+  worker-cpp/       ← C++ worker (detector, worker-cli, worker-bench,
+                      worker-server)                                    ✅
+  tools/            ← export/compare/test scripts (Python)              ✅
+  models/           ← yolov8n.pt + yolov8n.onnx (not in git)            ✅
+  testdata/         ← sample images + loop.mp4 (not in git)             ✅
+  third_party/      ← Windows-only: OpenCV 5.0 + ONNX Runtime (not in git)
+  scheduler-java/   ← Java scheduler (Gradle)                            ✅
+  scripts/          ← start-workers.sh / stop-workers.sh                ✅
+  bench/            ← Step 5 benchmark results + graph                  ✅
+  control-python/   ← Step 6
+  android-app/      ← Step 7
 ```
 
+**The backend runs on Linux.** In development that's **WSL Ubuntu 24.04** on this PC; in
+deployment, any Linux server. The source code stays in the Windows folder
+(`/mnt/c/.../AR` from WSL); build output and dependencies live in the Linux filesystem.
+
+| Component | Where it runs (dev) | Dependencies |
+|---|---|---|
+| C++ worker ✅ | WSL Ubuntu | `apt`: build-essential, cmake, ninja-build, libgrpc++-dev, protobuf-compiler-grpc, libprotobuf-dev, protobuf-compiler, libopencv-{core,imgproc,imgcodecs}-dev (~560 MB). ONNX Runtime 1.32 Linux in `~/ar-deps/onnxruntime`. Build output in `~/ar-build/worker-cpp` |
+| Java scheduler ✅ | WSL Ubuntu | `apt`: openjdk-21-jdk-headless (~300 MB). Gradle 9.9.1 wrapper; gRPC-Java 1.85.1, protobuf 4.36.2, JUnit 6.1.3 in `~/.gradle` (~400 MB) |
+| Python tools / control plane | WSL Ubuntu | Python 3.12, venv in `~/ar-venv` (grpcio, OpenCV, matplotlib; ~370 MB) |
+| Redis | WSL Ubuntu | `apt`: redis-server (~8 MB) |
+| Postgres | WSL Ubuntu (recommended) | `apt`: postgresql (~175 MB). A Postgres 15 also runs natively on Windows, but reaching it from WSL needs extra network setup |
+
+**Why everything in WSL, not split between Windows and WSL:** this PC runs **Windows 10**,
+where WSL2 uses a NAT network. Windows → WSL through `127.0.0.1` works, but **WSL → Windows
+through `127.0.0.1` does not**. A C++ worker in WSL could not send heartbeats to a Java
+scheduler running on Windows without extra setup (host IP, firewall rules). With the whole
+backend in WSL, every component reaches the others on `127.0.0.1`, exactly like on a real
+Linux server.
+
+**Editors:** the code is still edited in the Windows folder. IntelliJ IDEA can use a JDK
+inside WSL; Visual Studio can build and debug the CMake project in WSL; VS Code has a WSL mode.
+
 **No Docker, no nginx.**
-- Your own services (Java scheduler, C++ workers, Python control plane) run as **native
-  processes**. That makes profiling, debugging and CPU/thread control direct, and keeps
-  throughput measurements free of container CPU caps.
-- **Postgres:** native Windows install.
-- **Redis:** Memurai (Redis-compatible for Windows), WSL, or a single small container just
-  for Redis, whichever is easiest.
+- The services run as **native Linux processes**. That keeps profiling, debugging and
+  CPU/thread control direct, and keeps throughput measurements free of container CPU caps.
 - **No reverse proxy:** the Java scheduler is the single entry point and the Android app
   connects to it directly over gRPC. TLS can be turned on in grpc-java if needed.
 - Docker can be added later for packaging and deployment only.
 
+The Windows build of the C++ worker (MSVC, `third_party/`) still works for `worker-cli` and
+`worker-bench` (Visual Studio profiling). `worker-server` on Windows would need gRPC from
+vcpkg: a ~1 h from-source build needing ~10 GB free disk, so it isn't set up.
+
 ---
 
-## 6. Expected latency (CPU only, to check against real measurements)
+## 6. Latency and capacity (measured)
 
-| Step | Estimate |
+| Step | Value |
 |---|---|
-| Wi-Fi upload of about 40 KB | 20–50 ms |
-| Scheduler routing | < 5 ms |
-| YOLOv8n inference on CPU (640) | 40–80 ms |
-| Return trip | a few ms |
-| **Total round trip** | **about 100–200 ms on good Wi-Fi** |
+| Wi-Fi upload of about 50 KB | 20–50 ms (estimate, not measured yet) |
+| Scheduler overhead on top of inference | 5–113 ms measured (mostly waiting under load) |
+| C++ worker: decode + preprocess + postprocess | ~10–15 ms |
+| C++ worker: YOLOv8n inference on CPU (640) | ~75–160 ms alone; **250–300 ms each when 3 workers share the CPU at full load** |
+| **One session (8 fps), 3 workers × 2 threads** | client latency p50 ~210 ms, p95 ~245 ms, **99% within 300 ms** |
+| **Two sessions (16 fps asked)** | p50 ~270 ms, p95 ~380 ms, 74% within 300 ms, **96% within 400 ms** |
+
+All measured on one laptop (Intel i7-8550U, 4 cores / 8 threads, 15 W), clients included,
+no Wi-Fi. Full benchmark: `bench/summary.md`, `bench/throughput.png`.
+
+**Capacity:** ~11 frames/s in total on this laptop, reached with **3 workers × 2 threads**.
+More workers or threads than the 4 physical cores only make each inference slower.
+- One pair of glasses at 8 fps fits the 300 ms deadline.
+- Two pairs at the same time need either a 400 ms deadline (96% in time) or a bigger machine.
+  **Open decision** (section 8).
 
 That's fine for a fixed popup. It's too slow for boxes drawn on objects, because the
 wearer's head has moved by the time the result arrives. That's why boxes are left for
@@ -201,6 +282,11 @@ to reach the server's address.
 Plan B (Android app on a paired phone): the glasses don't need Wi-Fi at all. The glasses
 connect to the phone over USB-C, and the phone provides the network (Wi-Fi or 4G).
 
+**Reaching the backend in WSL from the phone or glasses (development, Windows 10):** other
+devices on the Wi-Fi can't reach WSL directly (WSL2 NAT). Windows has to forward the Java
+scheduler's port into WSL (`netsh interface portproxy`) and allow it in Windows Firewall.
+One-time setup, needed from Step 7. Not an issue on a real Linux server.
+
 Rules:
 - Never hard-code the server address in the Android app. Make it a setting (host + port).
 - When there's no network, Stream-Only shows nothing. That's the known limitation. The fix is
@@ -212,7 +298,7 @@ Rules:
 
 ## 7. Reused from soufiane-easy (by porting or reusing data, not shared code)
 
-- Model weights: COCO yolov8n, `fire.pt` (exported to ONNX here).
+- Model weights: COCO yolov8n (exported to ONNX here). `fire.pt` is available for later.
 - Detection format: `{label, confidence, box}`.
 - Rule-engine logic: threshold → quorum → cooldown.
 - "Newest frame wins" frame handling.
@@ -222,16 +308,21 @@ Rules:
 
 ## 8. Open questions
 
-1. **Models in v1:** only COCO plus `fire`, or also `plant`? The plant-disease model is a
-   transformers model (YOLOS-small), so it's much harder to port to C++. The proposal is to
-   leave it out of v1.
+1. ~~Models in v1~~ **Decided:** COCO yolov8n only. `fire` and `plant` are left out of v1.
 2. **Goolton SDK camera access:** this decides between Plan A and Plan B
-   (see `README-AR.md` → "To be tested").
-3. **Training our own YOLO model:** only needed if the glasses must detect classes that the
-   existing models don't cover.
+   (see `README-AR.md` → "To be tested"). Still to test on the real glasses.
+3. **What the glasses should detect:** COCO's classes are enough to build and test the whole
+   pipeline, but probably not what farm workers need. Decide before Step 8, ideally after a
+   farm visit. If the classes aren't covered, that means **training our own YOLO model**.
+4. **Frame deadline: 300 ms or 400 ms?** 300 ms serves one pair of glasses per laptop (99% in
+   time). 400 ms serves two pairs (96% in time); the popup would appear ~100 ms later.
+   Measured in Step 5, see section 6.
+5. **License before any company delivery:** Ultralytics YOLOv8 is AGPL-3.0. Fine for learning
+   and demos; a closed commercial delivery needs an Ultralytics license or an Apache-licensed
+   model (YOLOX, RT-DETR, D-FINE). The C++ worker's `Detector` interface keeps that swap small.
 
 ---
 
 ## 9. Build order
 
-See `ROADMAP.md` for the step-by-step plan.
+See `ROADMAP.md` for the step-by-step plan and the status of each step.

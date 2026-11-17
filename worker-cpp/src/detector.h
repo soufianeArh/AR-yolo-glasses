@@ -42,6 +42,11 @@ struct BadFrame : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// Thrown when abort_current() stopped an inference halfway (e.g. its deadline passed).
+struct Aborted : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 class Detector {
 public:
     virtual ~Detector() = default;
@@ -55,6 +60,11 @@ public:
 
     virtual const std::string& name() const = 0;
     virtual const std::vector<std::string>& class_names() const = 0;
+
+    // Ask the inference running right now (if any) to stop as soon as possible; that detect()
+    // call then throws Aborted. Safe to call from ANOTHER thread - that is its purpose.
+    // Calling it when nothing is running does nothing.
+    virtual void abort_current() {}
 };
 
 }  // namespace ar

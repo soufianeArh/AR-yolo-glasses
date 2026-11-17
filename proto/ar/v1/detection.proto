@@ -54,8 +54,9 @@ enum ResultStatus {
   OK                = 1;  // inference ran; detections may still be empty
   DROPPED_DEADLINE  = 2;  // frame was too old by the time a worker was free - dropped
   WORKER_FAILED     = 3;  // the worker errored or died, and the one retry also failed
-  NO_WORKER         = 4;  // no healthy worker available
+  NO_WORKER         = 4;  // no healthy worker available, or every worker tried had a full queue
   BAD_FRAME         = 5;  // the JPEG could not be decoded, or an unknown model was requested
+  SESSION_LIMIT     = 6;  // this Android app session already has too many frames in flight
 }
 
 // The answer for one frame.
