@@ -23,6 +23,7 @@ engine = make_engine()
 _redis = redis.Redis.from_url(settings.REDIS_URL, socket_timeout=1, socket_connect_timeout=1)
 
 Severity = Literal["low", "medium", "high"]
+Match = Literal["exact", "contains"]
 
 
 def conn():
@@ -39,6 +40,7 @@ def _row(r) -> dict:
 class RuleIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     label: str = Field(min_length=1, max_length=100, description="model class, e.g. 'cow' (case-insensitive)")
+    match: Match = Field("exact", description="'exact' label, or 'contains' (e.g. 'blight' covers every blight)")
     min_confidence: float = Field(0.5, ge=0, le=1)
     min_count: int = Field(1, ge=1)
     cooldown_seconds: int = Field(60, ge=0)
@@ -55,6 +57,7 @@ class RuleIn(BaseModel):
 class RulePatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     label: str | None = Field(None, min_length=1, max_length=100)
+    match: Match | None = None
     min_confidence: float | None = Field(None, ge=0, le=1)
     min_count: int | None = Field(None, ge=1)
     cooldown_seconds: int | None = Field(None, ge=0)

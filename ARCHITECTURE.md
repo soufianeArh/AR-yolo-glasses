@@ -1,10 +1,18 @@
 # AR Glasses Detection: Architecture (Stream-Only, v1)
 
-Status: **Steps 0–6 built and tested**: shared contract, C++ inference workers, Java
-scheduler with N workers (routing, retries, failover, per-session cap), benchmark, and the
+Status: **Steps 0–6 built and tested**, **Step 7.1–7.5 built and tested**: shared contract,
+C++ inference workers (COCO YOLOv8 + the plant-disease model), Java scheduler with N workers
+(routing by model, per-model deadlines, retries, failover, per-session cap), benchmarks, and the
 Python control plane (Redis Stream → Postgres, rule engine, REST API).
-The Android app is not started yet.
+**Next:** Step 7.6 (train our own plant-disease YOLOv8 on Colab - prepared), then the Android app
+(Step 8, on the emulator) and the glasses (Step 9).
 Progress and results per step: see `ROADMAP.md`.
+
+**What the system detects: plant diseases on leaves.** The goal of the detection part is
+**hands-free leaf inspection**: the wearer looks at a corn, tomato or potato leaf and the
+glasses show the disease (blight, rust, leaf spot, mosaic virus...), using soufiane-easy's
+`plant` model (30 PlantDoc classes). The COCO YOLOv8n model (people, cows...) used in Steps 2–6
+was a **placeholder** to build and test the pipeline; it stays as a fast pipeline test.
 
 This is the architecture for the first project idea, **Stream-Only** (see `README-AR.md`).
 The upgrade, **Stream + Local Model**, reuses this same backend and adds on-device inference later.
@@ -24,8 +32,10 @@ the glasses** and talks straight to the backend over Wi-Fi.
 - **Plan B (fallback):** if the Goolton SDK blocks custom apps or raw camera access, the same
   Android app runs on a paired Android phone, which talks to the glasses over USB-C/DP.
   The chain becomes glasses ↔ Android app on the phone ↔ backend.
-- **During development:** build and test the Android app on any normal Android phone with its
-  own camera. Only the camera source and the display output change for the glasses.
+- **During development:** the Android app is built and tested on the **Android emulator**,
+  configured to act like the glasses (landscape screen, black see-through background). **No phone
+  step**: the app goes from the emulator straight to the glasses. A phone only comes back if
+  Plan B is forced.
 
 Full data chain (Plan A):
 
@@ -65,18 +75,29 @@ with a copy of every result sent **async** to the Python control plane.
 
 ## 3. Components
 
-### 3.1 Android app (Kotlin)
+### 3.1 Android app (Kotlin), Step 8
 
-- **Capture:** CameraX during development, the Goolton SDK camera on the glasses.
-- **Pre-process on the device:** shrink each frame to about 640px and compress it to JPEG
-  (around 40–50 KB), so less data travels over Wi-Fi.
+- **Modes:**
+  - **Plant inspection, "look and hold" (main mode):** the app notices when the view is steady
+    (the wearer looks closely at a leaf and holds still), sends that ONE frame with model `plant`,
+    shows "checking...", then the result: e.g. "Tomato late blight 0.87" or "Healthy leaf".
+  - **COCO stream (pipeline test):** continuous frames at ~8 fps with model `default`.
+  - Continuous plant inspection comes once a fast plant model is trained (3.3).
+- **Image sources**, behind one `FrameSource` interface: `FileSource` (videos / images, the
+  main source on the PC), `CameraXSource` (the PC webcam through the emulator), later
+  `GooltonSource` (the glasses camera).
+- **Pre-process on the device:** shrink each frame and compress it to JPEG (around 40–50 KB at
+  640 px), so less data travels over Wi-Fi.
 - **Backpressure:** at most **1–2 frames in flight**. If the backend is slow, drop new
   frames instead of queuing them. Newest frame wins.
-- **Display:** a fixed-position popup in the top-right corner.
-  - Show it when a detection passes the confidence threshold.
+- **Display:** black background (see-through on optical glasses) and a fixed-position popup in
+  the top-right corner.
+  - Show it when a detection passes the confidence threshold (per model).
   - Hold it for about 3 seconds, then fade it out.
   - This smoothing happens in the Android app, so the popup stays steady without
     waiting for the Python rule engine.
+- **Debug view** (development only, off on the glasses): the frame being sent, boxes drawn on
+  it, frame counter, fps, latency.
 - **Transport:** one gRPC two-way stream to the Java scheduler per device session.
 - **Identity:** a simple per-device token, sent in the gRPC `authorization` header when the
   stream opens.
@@ -100,11 +121,16 @@ heartbeats (`WorkerControl`).
   workers abort an inference when its deadline passes (3.3).
 - **Deadline:** 300 ms per frame by default (`--deadline-ms`), from the moment the scheduler
   receives it. Past it → `DROPPED_DEADLINE`, never answered late. See section 6 for 300 vs 400 ms.
+  **Deadline per model** (Step 7.5, `--model-deadline`): **default `plant=3500`** - a "look and
+  hold" inspection takes ~1.6–2.5 s on the laptop; 2.5 s proved too tight under load.
+- **Model routing:** workers advertise their models in their heartbeat; a frame goes only to
+  workers that have its model (`Frame.models`, default `default`). Tested with a `plant` worker
+  next to a COCO worker: each frame only reaches workers of its model.
 - **Retry:** on queue full (`RESOURCE_EXHAUSTED`) or unreachable (`UNAVAILABLE`), **one** retry
   on another worker if at least 50 ms of the deadline is left. Never on a deadline miss.
 - **Per-session cap:** 2 frames in flight (`--session-max-in-flight`); more → `SESSION_LIMIT` at
   once, so one buggy client can't starve the others.
-- **Device token:** read from the `authorization` header, recorded, not checked yet (Step 7).
+- **Device token:** read from the `authorization` header, recorded, not checked yet (Step 8).
 - **Fast path:** the result goes straight back to the Android app on the same stream.
 - **Async copy to Redis:** every result goes into a bounded memory buffer (10,000) and one
   background thread writes the buffer to the Redis Stream `ar:results` in batches. The fast path
@@ -112,19 +138,41 @@ heartbeats (`WorkerControl`).
   buffer full → oldest dropped and counted. `--redis none` turns it off.
 - **Identity:** session ids are unique across scheduler restarts; the device id is a hash of the
   device token (`dev-xxxxxxxxxxxx`), the token itself is never logged or published.
-- **Metrics:** every 5 s: frames/s, counts per status, retries, backend p50/p95/p99, and per
-  worker: health, frames sent, in flight, average inference time.
-- **Tests:** 9 unit tests on the routing rules (fake clock), end-to-end suites for Steps 4 and 5.
+- **Metrics:** every 5 s: frames/s, counts per status, retries, backend p50/p95/p99 **per model**
+  (a 2 s plant inspection and a 150 ms COCO frame are never mixed), and per worker: health,
+  frames sent, in flight, average inference time.
+- **Tests:** 13 unit tests (routing rules with a fake clock, per-model deadlines), end-to-end
+  suites for Steps 4, 5 and 7.
 
-### 3.3 C++ inference workers ✅ built (Steps 2–3)
+### 3.3 C++ inference workers ✅ built (Steps 2–3, plant model Step 7)
 
 - Each worker is a small **gRPC server** (`worker-server`): it takes in a JPEG and returns a
   list of detections.
 - **Engine:** ONNX Runtime 1.32, CPU only. **OpenCV** for JPEG decode and resize.
-- **Model in v1:** `default` = COCO **YOLOv8n**, exported to ONNX (fixed 640×640 input) from
-  the same weights used in soufiane-easy. `fire` is left out of v1 (a weak fit for AR, never
-  tested on real fire, AGPL license). Class names are read from the `.onnx` file itself, so
-  another YOLOv8 export works without code changes.
+- **Models:**
+  - **Built: `default` = COCO YOLOv8n**, exported to ONNX (fixed 640×640 input) from the same
+    weights used in soufiane-easy. A **placeholder** used to build and test the pipeline; kept as
+    a fast pipeline test. Class names are read from the `.onnx` file itself, so another YOLOv8
+    export works without code changes.
+  - **Built (Step 7): `plant` = soufiane-easy's plant-disease model** (`models/plant.onnx`),
+    YOLOS-small trained on PlantDoc (30 classes over 13 crops). A **transformer** with a **second
+    C++ detector**, `YolosDetector`: dynamic input size (short side 512, long side ≤ 864,
+    multiple of 16), a port of torchvision's antialiased fixed-point resize, ImageNet
+    normalisation, softmax, no NMS. **Identical to soufiane-easy's Python on 45/45 test leaves.**
+    The position-embedding resize is exported as two MatMuls instead of a bicubic Resize node
+    (same math; 6.1 s → 1.9 s per inference, abort 2 s → 7 ms). **~1.6 s per inspection with
+    3 threads** (the whole CPU), hence "look and hold", not a live stream.
+    **Measured weak spots of the model:** right disease on only **48%** of labelled leaves
+    (neighbouring diseases confused, sometimes the wrong plant, healthy corn → blight), and
+    **unstable between frames** (8/14 reframed copies of a leaf get the same disease).
+  - **Next (Step 7.6, prepared): our own YOLOv8 trained on PlantDoc** (29 classes; training on
+    Google Colab's free GPU with `notebooks/train_plant_yolov8.ipynb`). Runs on the existing fast
+    YOLOv8 detector: the dry run took 136 ms per leaf. Compared with the current model by
+    `tools/eval_plant_models.py` (accuracy, stability, speed) before switching.
+  - **Choosing the detector:** `load_detector()` reads `model_type` from the ONNX metadata
+    (`yolos` for our plant export, YOLOv8 otherwise); `worker-server --model-type` forces it.
+    Both detectors share one ONNX Runtime layer (`OrtModel`: loading, metadata, run with abort).
+  - `fire` is not used (a weak fit for AR, never tested on real fire).
 - **Pre/post-processing reproduces Ultralytics exactly:** letterbox (gray 114 padding),
   per-class NMS (IoU 0.5), confidence threshold 0.4, boxes normalized to 0–1. Verified:
   0.00000 confidence difference and 0.000 px box difference on all test images, on both the
@@ -136,8 +184,8 @@ heartbeats (`WorkerControl`).
   - A call whose deadline passes **during** its inference is **aborted halfway** (ONNX Runtime
     `RunOptions::SetTerminate`, from a watcher thread polling every 5 ms). Either way, no CPU is
     spent on answers nobody is waiting for.
-  - Scaling = **more worker processes**. Measured best on this laptop: **3 workers × 2 threads**
-    (section 6).
+  - Scaling = **more worker processes**. Measured best on this laptop: COCO **3 workers × 2
+    threads**; plant **1 worker × 3 threads**, and **not both at once** (section 6).
 - **Failure handling:** frame-level problems (bad image, unknown model) → gRPC OK with
   `FrameResult.status = BAD_FRAME`. Capacity/transport problems (queue full, deadline,
   crash) → a gRPC error status.
@@ -177,7 +225,11 @@ processes, so a slow API request can never delay storing results:
 - **REST API** (`uvicorn ar_control.api:app`, port 8090): `/rules` CRUD with validation,
   `/alerts` (+ idempotent `/ack`, `/summary`), `/detections`, `/stats` (status counts,
   latency percentiles, per-worker share), `/health` (database, Redis, consumer pending/lag).
-  A `/config` endpoint is left for Step 7, when something reads it.
+  A `/config` endpoint is left for Step 8, when something reads it.
+- **"Label contains" rules** (Step 7, migration `0002`): `match = 'contains'` lets one rule cover
+  several labels, e.g. `blight` → Corn leaf blight, Tomato leaf late blight, Potato leaf early
+  blight...; the alert stores the label the model actually emitted. Tested end to end: alerts for
+  two blighted leaves, none for a healthy one.
 - It is **off the hot path**: tested by killing Redis and the consumer mid-stream; the popup's
   fast path was unaffected and no result was lost.
 
@@ -218,10 +270,13 @@ AR/
   testdata/         ← sample images + loop.mp4 (not in git)             ✅
   third_party/      ← Windows-only: OpenCV 5.0 + ONNX Runtime (not in git)
   scheduler-java/   ← Java scheduler (Gradle)                            ✅
-  scripts/          ← start-workers.sh / stop-workers.sh                ✅
-  bench/            ← Step 5 benchmark results + graph                  ✅
+  scripts/          ← start-backend.sh / stop-backend.sh (plant-only setup, --coco, --control),
+                      start-workers.sh / stop-workers.sh                ✅
+  bench/            ← benchmark results (Step 5 COCO, Step 7 plant split / model comparison) ✅
+  notebooks/        ← train_plant_yolov8.ipynb (Colab training, Step 7.6) ✅
+  datasets/         ← PlantDoc in YOLO format (not in git)               ✅
   control-python/   ← Python control plane (consumer, rules, API, migrations, tests) ✅
-  android-app/      ← Step 7
+  android-app/      ← Step 8
 ```
 
 **The backend runs on Linux.** In development that's **WSL Ubuntu 24.04** on this PC; in
@@ -273,7 +328,13 @@ vcpkg: a ~1 h from-source build needing ~10 GB free disk, so it isn't set up.
 All measured on one laptop (Intel i7-8550U, 4 cores / 8 threads, 15 W), clients included,
 no Wi-Fi. Full benchmark: `bench/summary.md`, `bench/throughput.png`.
 
-**Capacity:** ~11 frames/s in total on this laptop, reached with **3 workers × 2 threads**.
+**Plant inspection** (Step 7, current YOLOS model): **~1.6 s per inspection with 3 threads**
+(p95 1.8 s; 1.5–2.5 s through the whole chain as the CPU heats). Plant deadline 3.5 s.
+**Plant and COCO at the same time don't fit this laptop:** with a plant inspection every 2.5 s
+during a COCO stream, COCO fell to 0–61% OK and plant took 2.8–4.7 s (`bench/plant_split.json`).
+→ plant only on this machine; a trained YOLOv8 plant model (Step 7.6) should be ~10× lighter.
+
+**Capacity (COCO):** ~11 frames/s in total on this laptop, reached with **3 workers × 2 threads**.
 More workers or threads than the 4 physical cores only make each inference slower.
 - One pair of glasses at 8 fps fits the 300 ms deadline.
 - Two pairs at the same time need either a 400 ms deadline (96% in time) or a bigger machine.
@@ -306,10 +367,18 @@ to reach the server's address.
 Plan B (Android app on a paired phone): the glasses don't need Wi-Fi at all. The glasses
 connect to the phone over USB-C, and the phone provides the network (Wi-Fi or 4G).
 
-**Reaching the backend in WSL from the phone or glasses (development, Windows 10):** other
+**Reaching the backend in WSL from the glasses (development, Windows 10):** other
 devices on the Wi-Fi can't reach WSL directly (WSL2 NAT). Windows has to forward the Java
 scheduler's port into WSL (`netsh interface portproxy`) and allow it in Windows Firewall.
-One-time setup, needed from Step 7. Not an issue on a real Linux server.
+One-time setup, needed from Step 9 (the glasses). Not an issue on a real Linux server.
+
+**The emulator (Step 8), corrected 2026-11-18:** `10.0.2.2` (the emulator's address for the PC)
+does **not** reach the backend on this Windows 10 PC: it leads to Windows' IPv4 localhost, while
+WSL's relay only listens on IPv6 localhost (`::1`). The working route without admin rights is
+**WSL's own IP** (`wsl hostname -I`, changes after a reboot), set in the app (launch option now,
+settings screen in Step 8.6). A `portproxy` from `127.0.0.1` would also fix it (admin).
+**The backend must run in a WSL session that stays open:** WSL shuts down when no session is
+attached, stopping everything started in the background.
 
 Rules:
 - Never hard-code the server address in the Android app. Make it a setting (host + port).
@@ -322,7 +391,10 @@ Rules:
 
 ## 7. Reused from soufiane-easy (by porting or reusing data, not shared code)
 
-- Model weights: COCO yolov8n (exported to ONNX here). `fire.pt` is available for later.
+- **The plant-disease model** (`models/plant-disease`, YOLOS-small / PlantDoc, 30 classes):
+  the core model of this project from Step 7, exported to ONNX here. Its 6 test samples
+  (`samples/plant/`) and its measured behaviour are reused too.
+- Model weights: COCO yolov8n (exported to ONNX here), the pipeline placeholder.
 - Detection format: `{label, confidence, box}`.
 - Rule-engine logic: threshold → quorum → cooldown.
 - "Newest frame wins" frame handling.
@@ -332,12 +404,18 @@ Rules:
 
 ## 8. Open questions
 
-1. ~~Models in v1~~ **Decided:** COCO yolov8n only. `fire` and `plant` are left out of v1.
+1. ~~Models~~ **Decided:** the core model is **`plant`** (plant-disease inspection, Step 7).
+   COCO yolov8n stays as a pipeline test. `fire` is not used.
 2. **Goolton SDK camera access:** this decides between Plan A and Plan B
    (see `README-AR.md` → "To be tested"). Still to test on the real glasses.
-3. **What the glasses should detect:** COCO's classes are enough to build and test the whole
-   pipeline, but probably not what farm workers need. Decide before Step 8, ideally after a
-   farm visit. If the classes aren't covered, that means **training our own YOLO model**.
+3. ~~What the glasses should detect~~ **Decided:** plant diseases on leaves. **"Look and hold"
+   first** (one frame per inspection, works with the existing YOLOS model); **continuous
+   inspection later**, once our own fast YOLOv8 is trained on plant diseases (Step 7.6).
+   Measured (Step 7.4): ~1.6 s per inspection on this CPU with the current model. Still open:
+   whether the glasses camera can focus on a leaf close up (Step 9).
+   **Model quality** (Step 7): the current model is right on only 48% of labelled leaves and
+   unstable between frames. Answer in progress: train our own YOLOv8 (Step 7.6), and vote over
+   several frames of a hold in the app (Step 8.4).
 4. **Frame deadline: 300 ms or 400 ms?** 300 ms serves one pair of glasses per laptop (99% in
    time). 400 ms serves two pairs (96% in time); the popup would appear ~100 ms later.
    Measured in Step 5, see section 6.

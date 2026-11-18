@@ -8,16 +8,21 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Throughput and latency, logged every few seconds.
  * Latency here = backend time: from the scheduler receiving a frame to sending its result.
+ * Latency is kept PER MODEL: a plant inspection (~2 s) and a COCO frame (~150 ms) mixed into one
+ * percentile would mean nothing.
  */
 final class Metrics {
     private final Map<ResultStatus, LongAdder> totals = new EnumMap<>(ResultStatus.class);
-    private final ConcurrentLinkedQueue<Integer> window = new ConcurrentLinkedQueue<>();  // backend ms, OK only
+    // model -> backend ms of OK results in the current window
+    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<Integer>> window = new ConcurrentHashMap<>();
     private final Map<ResultStatus, LongAdder> windowCounts = new EnumMap<>(ResultStatus.class);
     private final LongAdder retries = new LongAdder();
     private final LongAdder windowRetries = new LongAdder();
@@ -43,12 +48,14 @@ final class Metrics {
         }
     }
 
-    void record(ResultStatus status, int backendMs) {
+    void record(String model, ResultStatus status, int backendMs) {
         LongAdder t = totals.get(status);
         if (t == null) return;
         t.increment();
         windowCounts.get(status).increment();
-        if (status == ResultStatus.OK) window.add(backendMs);
+        if (status == ResultStatus.OK) {
+            window.computeIfAbsent(model, m -> new ConcurrentLinkedQueue<>()).add(backendMs);
+        }
     }
 
     void retried() {
@@ -62,8 +69,15 @@ final class Metrics {
         final double seconds = (now - windowStartNanos) / 1e9;
         windowStartNanos = now;
 
-        List<Integer> lat = new ArrayList<>();
-        for (Integer v; (v = window.poll()) != null; ) lat.add(v);
+        Map<String, List<Integer>> lat = new TreeMap<>();
+        window.forEach((model, q) -> {
+            List<Integer> l = new ArrayList<>();
+            for (Integer v; (v = q.poll()) != null; ) l.add(v);
+            if (!l.isEmpty()) {
+                Collections.sort(l);
+                lat.put(model, l);
+            }
+        });
         long frames = 0;
         StringBuilder statuses = new StringBuilder();
         for (Map.Entry<ResultStatus, LongAdder> e : windowCounts.entrySet()) {
@@ -75,7 +89,11 @@ final class Metrics {
         if (r > 0) statuses.append(" retries=").append(r);
         if (frames == 0) return;
 
-        Collections.sort(lat);
+        StringBuilder latency = new StringBuilder();
+        lat.forEach((model, l) -> latency.append(' ').append(model).append(" p50=").append(pct(l, 50))
+                .append(" p95=").append(pct(l, 95)).append(" p99=").append(pct(l, 99)).append(" (n=")
+                .append(l.size()).append(')'));
+        if (latency.length() == 0) latency.append(" -");
         StringBuilder workers = new StringBuilder();
         for (WorkerRegistry.Worker w : registry.all()) {
             long sent = w.sent.get();
@@ -87,9 +105,8 @@ final class Metrics {
                     .append(" inflight ").append(w.inFlight.get())
                     .append(" avg ").append(Math.round(w.avgInferMs)).append("ms]");
         }
-        Log.info(String.format("last %.1fs: %d frames (%.1f fps)%s | backend p50=%s p95=%s p99=%s ms |%s%s",
-                seconds, frames, frames / seconds, statuses, pct(lat, 50), pct(lat, 95), pct(lat, 99), workers,
-                publisherState()));
+        Log.info(String.format("last %.1fs: %d frames (%.1f fps)%s | backend ms:%s |%s%s",
+                seconds, frames, frames / seconds, statuses, latency, workers, publisherState()));
     }
 
     String totals() {

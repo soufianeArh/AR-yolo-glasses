@@ -1,0 +1,59 @@
+[
+ {
+  "split": "COCO 2x1 + plant 1x3",
+  "threads": 5,
+  "coco_alone": {
+   "ok_pct": 38.8,
+   "ok_fps": 2.04,
+   "p95": 307
+  },
+  "coco_with_plant": {
+   "ok_pct": 0.0,
+   "ok_fps": 0.0,
+   "p95": null
+  },
+  "plant_n": 9,
+  "plant_p50": 2784,
+  "plant_p95": 2980,
+  "plant_within_2500": 22.2,
+  "plant_within_3500": 100.0
+ },
+ {
+  "split": "COCO 2x2 + plant 1x2",
+  "threads": 6,
+  "coco_alone": {
+   "ok_pct": 94.9,
+   "ok_fps": 6.24,
+   "p95": 290
+  },
+  "coco_with_plant": {
+   "ok_pct": 5.0,
+   "ok_fps": 0.27,
+   "p95": 304
+  },
+  "plant_n": 6,
+  "plant_p50": 4245,
+  "plant_p95": 4693,
+  "plant_within_2500": 0.0,
+  "plant_within_3500": 16.7
+ },
+ {
+  "split": "COCO 3x2 + plant 1x2",
+  "threads": 8,
+  "coco_alone": {
+   "ok_pct": 95.1,
+   "ok_fps": 6.44,
+   "p95": 272
+  },
+  "coco_with_plant": {
+   "ok_pct": 61.2,
+   "ok_fps": 3.25,
+   "p95": 302
+  },
+  "plant_n": 7,
+  "plant_p50": 3637,
+  "plant_p95": 4117,
+  "plant_within_2500": 0.0,
+  "plant_within_3500": 28.6
+ }
+]

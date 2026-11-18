@@ -5,6 +5,8 @@ A frame at 8 fps with a cow in view produces 8 "cow" detections a second - every
 none worth a new notification. This module is the reduction from "what the model saw" to
 "what a human should look at", and most of it is de-duplication. Three filters, in order:
 
+  0. label      the detection's label == rule.label, or CONTAINS it (rule.match = 'contains',
+                e.g. "blight" covers Corn leaf blight, Tomato leaf late blight, Potato leaf ...)
   1. threshold  confidence >= rule.min_confidence     (is the model sure?)
   2. quorum     at least rule.min_count in ONE frame  (is it significant?)
   3. cooldown   nothing from this rule for this DEVICE in the last N seconds
@@ -36,6 +38,7 @@ class Rule:
     id: int
     name: str
     label: str
+    match: str              # 'exact' or 'contains'
     min_confidence: float
     min_count: int
     cooldown_seconds: int
@@ -102,16 +105,22 @@ class RuleEngine:
         for rule in self.rules(conn):
             if rule.device_id is not None and rule.device_id != device:
                 continue
-            candidates = [h for h in by_label.get(rule.label, []) if h.confidence >= rule.min_confidence]
+            if rule.match == "contains":
+                pool = [h for lab, hs in by_label.items() if rule.label in lab for h in hs]
+            else:
+                pool = by_label.get(rule.label, [])
+            candidates = [h for h in pool if h.confidence >= rule.min_confidence]
             if len(candidates) < rule.min_count:
                 continue
             if not self._cooldown_expired(conn, rule, device, received_at):
                 continue
             self._pending[(rule.id, device)] = received_at
+            top = max(candidates, key=lambda h: h.confidence)
             raised.append({
                 "rule_id": rule.id, "rule_name": rule.name, "device_id": device, "session_id": session_id,
-                "frame_id": frame_id, "label": rule.label, "count": len(candidates),
-                "max_confidence": max(h.confidence for h in candidates), "severity": rule.severity,
+                # the label the model actually emitted (for 'contains' rules: e.g. "Tomato leaf late blight")
+                "frame_id": frame_id, "label": top.label if rule.match == "contains" else rule.label,
+                "count": len(candidates), "max_confidence": top.confidence, "severity": rule.severity,
                 "raised_at": received_at,
             })
         return raised

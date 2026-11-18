@@ -33,7 +33,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "ar/v1/detection.grpc.pb.h"
-#include "yolov8_detector.h"
+#include "detector.h"
 
 namespace pb = ar::v1;
 using Clock = std::chrono::steady_clock;
@@ -71,14 +71,14 @@ struct Options {
     std::string scheduler = "127.0.0.1:50051";  // empty = no heartbeats
     std::string advertise;                      // address the scheduler should call; default 127.0.0.1:<port>
     int max_queue = 2;
-    ar::YoloV8Config model;
+    ar::DetectorOptions model;
 };
 
 // ------------------------------------------------------------------ shared worker state
 
 struct WorkerState {
     Options opt;
-    std::unique_ptr<ar::YoloV8Detector> detector;
+    std::unique_ptr<ar::Detector> detector;
     std::mutex detector_mu;               // one inference at a time
     std::atomic<int> in_flight{0};        // running + waiting
     std::atomic<double> avg_infer_ms{0};  // moving average, read by the heartbeat thread
@@ -208,7 +208,15 @@ private:
 
 void heartbeat_loop(WorkerState& s) {
     const auto& o = s.opt;
-    auto stub = pb::WorkerControl::NewStub(grpc::CreateChannel(o.scheduler, grpc::InsecureChannelCredentials()));
+    // Reconnect backoff capped at 1 s: gRPC's default grows to 2 minutes, so after a long scheduler
+    // outage (70 s in the 8.7 test) the worker came back 35 s after the scheduler - the app then got
+    // "check failed" for every leaf meanwhile. Our own loop already paces the heartbeats (1/s).
+    grpc::ChannelArguments args;
+    args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 500);
+    args.SetInt(GRPC_ARG_MIN_RECONNECT_BACKOFF_MS, 500);
+    args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+    auto stub = pb::WorkerControl::NewStub(
+        grpc::CreateCustomChannel(o.scheduler, grpc::InsecureChannelCredentials(), args));
 
     bool connected = false, first = true, warned_rejected = false;
     while (!g_stop) {
@@ -252,7 +260,8 @@ int usage() {
     std::cerr << "usage: worker-server --model <file.onnx> [--port 50061] [--host 0.0.0.0] [--worker-id worker-1]\n"
                  "                     [--threads 2] [--scheduler 127.0.0.1:50051 | --scheduler none]\n"
                  "                     [--advertise 127.0.0.1:<port>] [--max-queue 2]\n"
-                 "                     [--conf 0.4] [--iou 0.5] [--name default]\n";
+                 "                     [--conf 0.4] [--iou 0.5] [--name default]\n"
+                 "                     [--model-type auto|yolov8|yolos]   (auto = read from the model file)\n";
     return 2;
 }
 
@@ -268,6 +277,7 @@ int main(int argc, char** argv) {
             if (a == "--model") o.model.model_path = v;
             else if (a == "--name") o.model.name = v;
             else if (a == "--threads") o.model.threads = std::stoi(v);
+            else if (a == "--model-type") o.model.model_type = v;
             else if (a == "--conf") o.model.conf_threshold = std::stof(v);
             else if (a == "--iou") o.model.iou_threshold = std::stof(v);
             else if (a == "--port") o.port = std::stoi(v);
@@ -288,7 +298,7 @@ int main(int argc, char** argv) {
     state.opt = o;
     try {
         const auto t0 = Clock::now();
-        state.detector = std::make_unique<ar::YoloV8Detector>(o.model);
+        state.detector = ar::load_detector(o.model);
         // Warm-up: the first forward pass is much slower (allocations, kernel selection).
         // Pay it now, not on the first real frame.
         state.detector->detect(cv::Mat(480, 640, CV_8UC3, cv::Scalar(114, 114, 114)));

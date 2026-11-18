@@ -1,8 +1,13 @@
 #include "detector.h"
 
 #include <chrono>
+#include <stdexcept>
 
 #include <opencv2/imgcodecs.hpp>
+
+#include "ort_model.h"
+#include "yolos_detector.h"
+#include "yolov8_detector.h"
 
 namespace ar {
 
@@ -21,6 +26,19 @@ std::vector<Detection> Detector::detect_encoded(const std::uint8_t* data, std::s
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
     return detect(bgr, timing);
+}
+
+std::string detect_model_type(const std::string& model_path) {
+    const OrtModel peek(model_path, 1);
+    const auto type = peek.metadata("model_type");
+    return type ? *type : "yolov8";
+}
+
+std::unique_ptr<Detector> load_detector(const DetectorOptions& options) {
+    const std::string type = options.model_type == "auto" ? detect_model_type(options.model_path) : options.model_type;
+    if (type == "yolov8") return std::make_unique<YoloV8Detector>(options);
+    if (type == "yolos") return std::make_unique<YolosDetector>(options);
+    throw std::invalid_argument("unknown model type '" + type + "' (expected yolov8 or yolos)");
 }
 
 }  // namespace ar

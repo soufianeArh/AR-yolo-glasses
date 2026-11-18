@@ -71,7 +71,8 @@ public final class Main {
 
         // Tests wait for this exact line.
         Log.info("READY listening on 0.0.0.0:" + cfg.port() + ", frame deadline " + cfg.deadlineMs()
-                + " ms, heartbeat timeout " + cfg.heartbeatTimeoutMs() + " ms, session cap "
+                + " ms" + (cfg.modelDeadlinesMs().isEmpty() ? "" : " (per model: " + cfg.modelDeadlinesMs() + ")")
+                + ", heartbeat timeout " + cfg.heartbeatTimeoutMs() + " ms, session cap "
                 + cfg.sessionMaxInFlight() + " in flight, results to "
                 + (publisher == null ? "nowhere (--redis none)" : "redis " + cfg.redis() + " stream " + cfg.stream()));
         server.awaitTermination();

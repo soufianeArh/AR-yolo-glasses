@@ -1,17 +1,12 @@
 #include "yolov8_detector.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
-#include <filesystem>
-#include <mutex>
 #include <numeric>
-#include <regex>
 #include <stdexcept>
 #include <utility>
 
-#include <onnxruntime_cxx_api.h>
 #include <opencv2/imgproc.hpp>
 
 namespace ar {
@@ -27,29 +22,6 @@ double ms_since(Clock::time_point t0) {
 // default floating-point rounding mode. Used wherever Ultralytics calls round(),
 // so the letterbox size and padding come out to exactly the same pixel.
 int py_round(double v) { return static_cast<int>(std::nearbyint(v)); }
-
-// One process-wide ONNX Runtime environment, shared by every detector instance.
-Ort::Env& ort_env() {
-    static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "ar-worker");
-    return env;
-}
-
-// Ultralytics writes class names into the ONNX metadata as a Python dict literal:
-//   "{0: 'person', 1: 'bicycle', ...}"
-std::vector<std::string> parse_names(const std::string& text) {
-    static const std::regex entry(R"((\d+)\s*:\s*['"]([^'"]*)['"])");
-    std::vector<std::pair<int, std::string>> pairs;
-    for (auto it = std::sregex_iterator(text.begin(), text.end(), entry); it != std::sregex_iterator(); ++it) {
-        pairs.emplace_back(std::stoi((*it)[1].str()), (*it)[2].str());
-    }
-    if (pairs.empty()) throw std::runtime_error("model metadata 'names' is empty or unreadable");
-
-    int max_id = 0;
-    for (const auto& p : pairs) max_id = std::max(max_id, p.first);
-    std::vector<std::string> names(static_cast<std::size_t>(max_id) + 1);
-    for (auto& p : pairs) names[static_cast<std::size_t>(p.first)] = std::move(p.second);
-    return names;
-}
 
 // A candidate box in letterboxed (model input) pixel coordinates.
 struct Candidate {
@@ -93,48 +65,10 @@ std::vector<std::size_t> nms(const std::vector<Candidate>& c, float iou_threshol
 
 }  // namespace
 
-// ------------------------------------------------------------------ ONNX Runtime state
-
-struct YoloV8Detector::Impl {
-    std::unique_ptr<Ort::Session> session;
-    std::string input_name, output_name;
-    Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-    // The run in progress, so another thread can terminate it (abort_current).
-    std::mutex run_mu;
-    Ort::RunOptions* current_run = nullptr;
-    bool abort_requested = false;
-};
-
-void YoloV8Detector::abort_current() {
-    std::lock_guard<std::mutex> lk(impl_->run_mu);
-    if (impl_->current_run != nullptr) {
-        impl_->current_run->SetTerminate();  // ONNX Runtime checks this flag between graph nodes
-        impl_->abort_requested = true;
-    }
-}
-
-YoloV8Detector::YoloV8Detector(YoloV8Config config) : impl_(std::make_unique<Impl>()), config_(std::move(config)) {
-    if (config_.threads < 1) throw std::invalid_argument("threads must be >= 1");
-
-    Ort::SessionOptions options;
-    options.SetIntraOpNumThreads(config_.threads);  // threads for one forward pass
-    options.SetInterOpNumThreads(1);                // one graph branch at a time
-    options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-    options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-    // path::c_str() is wchar_t on Windows and char on Linux - exactly what ORTCHAR_T is.
-    const std::filesystem::path path(config_.model_path);
-    if (!std::filesystem::exists(path)) throw std::runtime_error("model file not found: " + config_.model_path);
-    impl_->session = std::make_unique<Ort::Session>(ort_env(), path.c_str(), options);
-    Ort::Session& s = *impl_->session;
-
-    Ort::AllocatorWithDefaultOptions alloc;
-    impl_->input_name = s.GetInputNameAllocated(0, alloc).get();
-    impl_->output_name = s.GetOutputNameAllocated(0, alloc).get();
-
+YoloV8Detector::YoloV8Detector(DetectorOptions options)
+    : opt_(std::move(options)), model_(opt_.model_path, opt_.threads) {
     // Input must be a FIXED [1, 3, H, W] - the model was exported that way (Step 0).
-    const auto in_shape = s.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+    const auto in_shape = model_.input_shape();
     if (in_shape.size() != 4 || in_shape[0] != 1 || in_shape[1] != 3 || in_shape[2] <= 0 || in_shape[3] <= 0) {
         throw std::runtime_error("expected a fixed [1,3,H,W] model input");
     }
@@ -142,28 +76,22 @@ YoloV8Detector::YoloV8Detector(YoloV8Config config) : impl_(std::make_unique<Imp
     input_w_ = static_cast<int>(in_shape[3]);
 
     // Output: [1, 4 + num_classes, num_candidates], e.g. [1, 84, 8400].
-    const auto out_shape = s.GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+    const auto out_shape = model_.output_shape(0);
     if (out_shape.size() != 3 || out_shape[0] != 1 || out_shape[1] <= 4 || out_shape[2] <= 0) {
         throw std::runtime_error("expected a [1, 4+classes, candidates] model output");
     }
     num_classes_ = static_cast<int>(out_shape[1]) - 4;
     num_candidates_ = static_cast<int>(out_shape[2]);
 
-    const auto meta = s.GetModelMetadata();
-    const auto names = meta.LookupCustomMetadataMapAllocated("names", alloc);
+    const auto names = model_.metadata("names");
     if (!names) throw std::runtime_error("model has no 'names' metadata (not an Ultralytics export?)");
-    names_ = parse_names(names.get());
+    names_ = parse_names(*names);
     if (static_cast<int>(names_.size()) != num_classes_) {
         throw std::runtime_error("metadata has " + std::to_string(names_.size()) + " class names but the output has " +
                                  std::to_string(num_classes_) + " classes");
     }
-
     input_.resize(static_cast<std::size_t>(3) * input_h_ * input_w_);
 }
-
-YoloV8Detector::~YoloV8Detector() = default;
-
-// ------------------------------------------------------------------ detect
 
 std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* timing) {
     if (bgr.empty() || bgr.type() != CV_8UC3) throw BadFrame("expected a non-empty 8-bit BGR image");
@@ -206,42 +134,10 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
     }
     if (timing) timing->preprocess_ms = ms_since(t0);
 
-    // ---------------------------------------------------------- 3. forward pass
+    // ---------------------------------------------------------- 3. forward pass (abortable)
     t0 = Clock::now();
-    const std::array<std::int64_t, 4> shape{1, 3, input_h_, input_w_};
-    Ort::Value in = Ort::Value::CreateTensor<float>(impl_->memory, input_.data(), input_.size(), shape.data(),
-                                                    shape.size());
-    const char* in_names[] = {impl_->input_name.c_str()};
-    const char* out_names[] = {impl_->output_name.c_str()};
-
-    // A fresh RunOptions per run, published so abort_current() can terminate THIS run only.
-    Ort::RunOptions run_options;
-    {
-        std::lock_guard<std::mutex> lk(impl_->run_mu);
-        impl_->current_run = &run_options;
-        impl_->abort_requested = false;
-    }
-    struct Unpublish {
-        Impl& impl;
-        ~Unpublish() {
-            std::lock_guard<std::mutex> lk(impl.run_mu);
-            impl.current_run = nullptr;
-        }
-    } unpublish{*impl_};
-
-    std::vector<Ort::Value> outputs;
-    try {
-        outputs = impl_->session->Run(run_options, in_names, &in, 1, out_names, 1);
-    } catch (const Ort::Exception&) {
-        bool aborted;
-        {
-            std::lock_guard<std::mutex> lk(impl_->run_mu);
-            aborted = impl_->abort_requested;
-        }
-        if (aborted) throw Aborted("inference aborted");
-        throw;
-    }
-    const float* out = outputs[0].GetTensorData<float>();
+    const auto outputs = model_.run(input_.data(), {1, 3, input_h_, input_w_});
+    const float* out = outputs[0].data;
     if (timing) timing->infer_ms = ms_since(t0);
 
     // ---------------------------------------------------------- 4. decode candidates
@@ -260,14 +156,14 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
                 best = c;
             }
         }
-        if (!(best_score > config_.conf_threshold)) continue;  // strictly greater, like Ultralytics
+        if (!(best_score > opt_.conf_threshold)) continue;  // strictly greater, like Ultralytics
         const float cx = out[0 * n + a], cy = out[1 * n + a];
         const float half_w = out[2 * n + a] / 2.f, half_h = out[3 * n + a] / 2.f;
         cands.push_back({cx - half_w, cy - half_h, cx + half_w, cy + half_h, best_score, best});
     }
 
     // ---------------------------------------------------------- 5. NMS
-    const auto keep = nms(cands, config_.iou_threshold, config_.max_detections);
+    const auto keep = nms(cands, opt_.iou_threshold, opt_.max_detections);
 
     // ---------------------------------------------------------- 6. back to the original image, normalized
     // Same as Ultralytics scale_boxes(): undo the padding, then the per-axis resize gain.
@@ -289,7 +185,7 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
     for (const std::size_t i : keep) {
         const Candidate& c = cands[i];
         result.push_back({names_[static_cast<std::size_t>(c.cls)], c.score, to_x(c.x1), to_y(c.y1), to_x(c.x2),
-                          to_y(c.y2), config_.name});
+                          to_y(c.y2), opt_.name});
     }
     if (timing) timing->postprocess_ms = ms_since(t0);
     return result;

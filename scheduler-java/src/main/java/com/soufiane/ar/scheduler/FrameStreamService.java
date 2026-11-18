@@ -125,16 +125,16 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             final long t0 = System.nanoTime();
             received.incrementAndGet();
             final Frame frame = incoming.toBuilder().setSessionId(id).build();
+            final String model = frame.getModelsCount() == 0 ? DEFAULT_MODEL : frame.getModels(0);
 
             // A well-behaved Android app keeps 1-2 frames in flight. Beyond the cap, answer at once
             // instead of letting one session flood the workers.
             if (pending.get() >= cfg.sessionMaxInFlight()) {
                 send(failure(frame, ResultStatus.SESSION_LIMIT, "",
-                        "session has " + cfg.sessionMaxInFlight() + " frames in flight already"), t0, false);
+                        "session has " + cfg.sessionMaxInFlight() + " frames in flight already"), model, t0, false);
                 return;
             }
             pending.incrementAndGet();
-            final String model = frame.getModelsCount() == 0 ? DEFAULT_MODEL : frame.getModels(0);
             attempt(frame, model, t0, null, null);
         }
 
@@ -144,16 +144,16 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
          */
         private void attempt(Frame frame, String model, long t0, WorkerRegistry.Worker failedWorker,
                              FrameResult previous) {
-            final long leftMs = cfg.deadlineMs() - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+            final long leftMs = cfg.deadlineFor(model) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             if (leftMs <= 0) {
-                send(failure(frame, ResultStatus.DROPPED_DEADLINE, "", "deadline used up before a worker took it"), t0, true);
+                send(failure(frame, ResultStatus.DROPPED_DEADLINE, "", "deadline used up before a worker took it"), model, t0, true);
                 return;
             }
             WorkerRegistry.Worker w = registry.reserve(model, failedWorker).orElse(null);
             if (w == null) {
                 send(previous != null ? previous
                         : failure(frame, ResultStatus.NO_WORKER, "", "no healthy worker has model '" + model + "'"),
-                        t0, true);
+                        model, t0, true);
                 return;
             }
 
@@ -163,7 +163,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             } catch (RuntimeException e) {          // channel already shut down, etc.
                 registry.release(w);
                 w.failed.incrementAndGet();
-                send(failure(frame, ResultStatus.WORKER_FAILED, w.id, String.valueOf(e.getMessage())), t0, true);
+                send(failure(frame, ResultStatus.WORKER_FAILED, w.id, String.valueOf(e.getMessage())), model, t0, true);
                 return;
             }
 
@@ -172,7 +172,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                 public void onSuccess(FrameResult r) {
                     registry.release(w);
                     w.ok.incrementAndGet();
-                    send(r.toBuilder().setSessionId(id).build(), t0, true);
+                    send(r.toBuilder().setSessionId(id).build(), model, t0, true);
                 }
 
                 @Override
@@ -191,12 +191,12 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                     }
                     FrameResult fail = failure(frame, rs, w.id, why);
 
-                    final long left = cfg.deadlineMs() - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+                    final long left = cfg.deadlineFor(model) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
                     if (failedWorker == null && retryable(st.getCode()) && left >= cfg.minRetryMs()) {
                         metrics.retried();
                         attempt(frame, model, t0, w, fail);
                     } else {
-                        send(fail, t0, true);
+                        send(fail, model, t0, true);
                     }
                 }
             }, MoreExecutors.directExecutor());
@@ -213,10 +213,10 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         }
 
         /** @param counted true if this frame was counted in {@code pending}. */
-        private void send(FrameResult r, long t0, boolean counted) {
+        private void send(FrameResult r, String model, long t0, boolean counted) {
             final int backendMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             final FrameResult result = r.toBuilder().setBackendMs(backendMs).build();
-            metrics.record(result.getStatus(), backendMs);
+            metrics.record(model, result.getStatus(), backendMs);
             // A copy for the Python control plane. Non-blocking: never delays the answer below.
             if (publisher != null) {
                 publisher.publish(result, device, System.currentTimeMillis() - backendMs);

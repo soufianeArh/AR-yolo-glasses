@@ -18,8 +18,9 @@ never stop the backend work.
 | 4 | Java scheduler v1 + fake client | ✅ done, goals met; one timing check flaky (CPU throttling, see Step 4) |
 | 5 | Java scheduler v2, N workers | ✅ done, all suites pass; benchmark: best setup 3 workers × 2 threads, ~11 fps ceiling |
 | 6 | Python control plane | ✅ done, all suites pass; nothing lost when Redis or the consumer dies |
-| 7 | Android app on a phone | next |
-| 8 | On the glasses | — |
+| 7 | **Plant-disease detection in the backend** (the core goal of the detection part) | 7.1–7.5 ✅ done, all suites pass; 7.6 (training our own YOLOv8) prepared, waiting for the Colab run |
+| 8 | Android app on the emulator, shaped like the glasses (no phone step) | — |
+| 9 | On the glasses | — |
 
 **Where things run:** the whole backend runs in **WSL Ubuntu** (Linux), see
 `ARCHITECTURE.md` section 5. Source code stays in this Windows folder.
@@ -287,7 +288,7 @@ Done:
     latency percentiles, per-worker share), `/health` (database, Redis, consumer pending/lag).
   - **Migrations:** Alembic (`migrations/versions/0001_initial.py`), tested down and up.
 - `/config` (models, thresholds) **not built**: nothing reads it until the Android app's settings
-  exist. Moved to Step 7.
+  exist. Moved to Step 8.
 
 **Tests** (all rerun at the end of the step):
 
@@ -332,46 +333,293 @@ cd control-python && ~/ar-venv/bin/python -m pytest -q && cd ..
 
 ---
 
-## Step 7: Android app on a normal phone
+## Step 7: Plant-disease detection in the backend
 
-**Goal:** the real client, without the glasses yet.
+**Goal:** the C++ workers detect **leaf diseases** (corn, tomato, potato...): this is the core
+goal of the detection part. COCO YOLOv8n (cows, people) was only a placeholder to build and test
+the pipeline in Steps 2–6; it stays as a fast pipeline test.
 
-**Before starting:** the phone can't reach the backend inside WSL directly. On Windows, forward
-the Java scheduler's port into WSL (`netsh interface portproxy`) and allow it in Windows
-Firewall (one-time setup, needs admin). Android Studio and the Android SDK are already installed.
+**The model:** soufiane-easy's `plant` model, YOLOS-small trained on PlantDoc: **30 classes over
+13 crops**, e.g. `Corn leaf blight`, `Corn rust leaf`, `Corn Gray leaf spot`,
+`Tomato Early blight leaf`, `Tomato leaf late blight`, `Tomato Septoria leaf spot`,
+`Tomato leaf mosaic virus`, `Potato leaf early blight`, `Potato leaf late blight`, plus healthy
+leaves (`Tomato leaf`, `Potato leaf`...). Known behaviour (from soufiane-easy's own tests):
+- no healthy-corn class → a healthy corn leaf can be called `Corn leaf blight` (0.70);
+- tomato blight is often reported as `Potato leaf late blight` (same pathogen);
+- scores run lower than COCO's → its own confidence floor (0.40 in soufiane-easy);
+- **the leaf must fill the frame**: lesions are millimetres wide. It is an **inspection** job,
+  not something seen from a distance while walking.
 
-- Kotlin app with CameraX capture: resize to 640, JPEG, gRPC stream (grpc-okhttp).
-- A `FrameSource` interface: `CameraXSource`, `FileSource` (plays `loop.mp4` / images, works on
-  the emulator), later `GooltonSource`.
-- Backpressure: at most 1–2 frames in flight, drop the rest.
-- Popup overlay in the top-right corner: show on detection, hold about 3 seconds, fade.
-- A settings screen for the server host and port (never hard-coded).
-- `/config` endpoint in the control plane (moved from Step 6) if the Android app needs
-  server-side settings (models, thresholds).
-- Test on the same Wi-Fi as the PC, then through a phone hotspot.
+**Why it needs work:** it is a **transformer** (YOLOS, loaded with `transformers`), not a
+YOLOv8 network, so the current C++ detector can't run it, and it is **heavier** (bigger input,
+estimated 0.5–2 s per image on this CPU, to be measured): it can't fit the 300 ms live stream.
 
-**Done when:** pointing the phone at a sample image on a screen shows the correct popup,
-with measured round-trip latency.
+**How the wearer uses it: "look and hold" first.** The wearer looks closely at a leaf and holds
+still for a moment; ONE frame goes to the plant model with a longer deadline (~2 s); a popup
+shows the result, e.g. "Tomato late blight 0.87". Continuous checking comes later, once a fast
+model is trained (7.6).
+
+**Sub-steps:**
+
+| # | Sub-step | What you get | Done when |
+|---|---|---|---|
+| **7.1** | Plant test material | soufiane-easy's 6 plant samples; more diseased-leaf photos (e.g. PlantDoc); short videos made by slowly panning/zooming across them (simulated head movement); free healthy-plant videos (Mixkit/Coverr) to catch false alarms | `testdata/plant/` holds images + videos, each with the expected label |
+| **7.2** | Export the plant model to ONNX | soufiane-easy's YOLOS model exported to ONNX; the ONNX output compared with soufiane-easy's Python output | Same labels and scores (±0.01) as soufiane-easy on the 6 samples |
+| **7.3** | Second C++ detector (`YolosDetector`) + worker option | Its own pre-processing (resize, ImageNet normalisation) and post-processing (no NMS: one box per query, softmax over classes), behind the same `Detector` interface; class names read from the model. **`worker-server` gets an option to choose the detector** (e.g. `--model-type yolov8 / yolos`; today it always creates a YOLOv8 detector). **The abort-at-deadline mechanism** (Step 5) must work for the new detector too | `compare.py`-style check: same results as soufiane-easy in Python; a plant worker registers with model `plant`; the worker test suite passes for both detector types, including the abort check |
+| **7.4** | Benchmark + CPU split | ms per image for 1–6 threads, like Step 2. Plant and COCO workers **share the same 4 cores**: a plant inspection (~1–2 s) running during the COCO stream slows COCO frames down | A table, and a decision: how many cores / workers go to `plant` vs `default`, measured with both running at once |
+| **7.5** | Scheduler, control plane and tools for several models | **Scheduler:** routing by model already works (Step 5); add a **deadline per model** (e.g. `default` 300 ms, `plant` ~2 s). **Control plane:** rules today match ONE exact label; add a **"label contains"** option so one rule can alert on any `blight` (corn, tomato, potato...). **Fake client:** a `--model` option (today it always asks for `default`) | A "look and hold" frame through the full chain returns the disease within its deadline; a "contains blight" rule raises an alert on a blighted leaf; COCO frames unaffected; all earlier test suites still pass |
+| **7.6** | Later, for speed: train our own YOLOv8 on plant diseases | A YOLOv8 trained on PlantDoc (needs a GPU: e.g. free Google Colab; this laptop has none); exported to ONNX, it runs on the existing fast C++ detector | Continuous inspection at stream speed; compared with YOLOS on the same test set |
+
+**Done when:** a diseased-leaf frame sent through the scheduler comes back with the right
+disease (same as soufiane-easy), within the plant deadline, on the test material of 7.1.
+
+### Step 7 results (7.1–7.5 done)
+
+Installed: `transformers`, `onnxscript` in `tools/.venv` (Windows). The plant model is copied to
+`models/plant-disease/` (120 MB, not in git) and exported to `models/plant.onnx`.
+
+- **7.1 Test material:** `testdata/plant/` = soufiane-easy's 6 samples + 39 PlantDoc TEST images
+  (3 for each of 13 corn/tomato/potato classes), expected labels in `expected.json`;
+  `testdata/plant/videos/` = 3 look-and-hold videos (corn, tomato, potato; 24 fps, 1280×720; the
+  view moves with motion blur, holds 2 s on a leaf, moves on) + `*.timeline.json` (hold windows and
+  expected disease). Tools: `tools/make_plant_videos.py`.
+- **7.2 Export** (`tools/export_plant_onnx.py`): dynamic height/width (the model takes a different
+  size per image: short side 512, long side ≤ 864, multiple of 16), checked against PyTorch at every
+  test size; class names and preprocessing written into the ONNX metadata.
+  **Speed fix:** the model resizes its position embeddings with bicubic interpolation, which ONNX
+  Runtime ran extremely slowly (3.6 s of ~5 s; one 3.3 s node that also delayed aborts by ~2 s).
+  Exported instead as two small matrix multiplications with the same math
+  (`tools/bicubic_matmul.py`, equal to PyTorch within 1e-6): **6.1 s → 1.9 s** per inference
+  (2 threads), **abort 2 s → 7 ms**.
+- **7.3 C++:** `YolosDetector` (`worker-cpp/src/yolos_detector.cpp`): a port of transformers'
+  preprocessing, including torchvision's **antialiased fixed-point resize** (pixel-identical on
+  14/15 test images, ±1 level on 0.25% of pixels in an extreme 5× shrink), softmax over 31+1
+  classes, no NMS. Both detectors now share `OrtModel` (`ort_model.cpp`: loading, metadata,
+  run with abort). `load_detector()` picks the type from the model file (`--model-type` to force).
+- **7.4 Speed** (one worker, ~640 px frame): 1 thread 3.4 s, 2 threads 1.9 s, **3 threads 1.6 s**
+  (p95 1.8 s), 4 threads 1.6 s, 6 threads 1.4 s. **CPU split** (`tools/bench_plant_split.py`,
+  `bench/plant_split.json`): running a plant inspection every 2.5 s DURING a COCO stream breaks
+  both on this 4-core laptop (COCO 0–61% OK, plant 2.8–4.7 s). → **Plant only**: 1 plant worker ×
+  3 threads; COCO only for pipeline tests, not at the same time.
+- **7.5 Several models:** scheduler **deadline per model** (`--model-deadline`, **default
+  `plant=3500`**: 2.5 s was too tight under load) and per-model latency in the logs; control plane
+  **"label contains" rules** (migration `0002`, e.g. one `blight` rule for every crop); fake
+  client `--model plant`; `scripts/start-backend.sh` / `stop-backend.sh` (plant-only setup,
+  `--coco N`, `--control`).
+
+**Tests:**
+
+| Suite | Result |
+|---|---|
+| `tools/compare_plant.py`: C++ vs Python (transformers), 45 leaves | **45/45 identical** |
+| `tools/test_worker_server.py` with the plant model (incl. abort) | **16/16** |
+| `tools/test_plant_pipeline.py` (routing by model, plant deadline, "blight" alerts, videos) | **8/8** |
+| Worker suite with COCO / `compare.py --wsl` (regression after the refactor) | 16/16 / exact |
+| Steps 4, 5, 6 end-to-end (regression) | 15/15, 18/18, 15/15 |
+| Java unit (+ per-model deadline) / Python unit (+ contains rules) | 13/13 / 23/23 |
+
+**Findings about the model itself** (Python gives the same answers, so not our code):
+- **Accuracy: 21/44 (48%)** right disease on the labelled leaves: confuses neighbouring diseases
+  (corn blight ↔ gray leaf spot; tomato early blight / bacterial spot / septoria / mold), sometimes
+  the wrong plant ("Blueberry leaf" for potato), healthy corn → "Corn leaf blight" (no healthy-corn
+  class), finds nothing on 5 leaves.
+- **Stability: 8/14** look-and-hold frames give the same disease as the original photo: the same
+  leaf, slightly reframed / rescaled / compressed, often gets a different disease. On the glasses
+  every frame differs a little → one frame can't be trusted alone (vote over several frames in
+  the app, 8.4) or a better model is needed (7.6).
+- **Speed:** ~1.6–2.5 s per inspection, the whole CPU.
+
+### 7.6 Train our own YOLOv8 on plant diseases (prepared, waiting for the Colab run)
+
+Why: findings above. A YOLOv8 trained on PlantDoc runs on the existing fast C++ path.
+Prepared and checked on this PC:
+- `tools/plantdoc_to_yolo.py`: PlantDoc → YOLO format (safe file names - some PlantDoc names are
+  invalid on Windows; images ≤ 1280 px). Result here: `datasets/plantdoc-yolo/` (2,342 train /
+  236 val images, 8,458 boxes, **29 classes**, 416 MB, not in git). Training on TRAIN only;
+  TEST is validation and the source of our 45 evaluation leaves.
+- **Dry run on this PC:** 1 epoch on 5% of the data (CPU) → ONNX → loaded by the C++ worker on
+  the YOLOv8 path: works, **136 ms per leaf** (3 threads, yolov8n) vs ~1.6 s for the current model.
+- **`notebooks/train_plant_yolov8.ipynb`** (built by `tools/make_colab_notebook.py`): on
+  colab.research.google.com: File → Upload notebook → Runtime → T4 GPU → Run all (~45–60 min);
+  trains YOLOv8s, 100 epochs, prints per-class AP, downloads `plant_yolov8_results.zip`.
+- **`tools/eval_plant_models.py --new models/plant-yolov8.pt`**: current vs new model on
+  accuracy (44 leaves), stability (14 holds) and speed, through the C++ worker → `bench/plant_models.json`.
+
+**Fairness check before trusting the comparison** (the new model's score would look better than
+it really is if it trained on the test leaves):
+- Our evaluation leaves come from PlantDoc TEST, and training uses TRAIN only: no direct overlap.
+- Still check by **image hash** that none of the 44 evaluation leaves (and the leaves in the
+  look-and-hold videos) appears in TRAIN: a dataset can hold the same photo under two names.
+- TEST is also the validation set Ultralytics uses to pick `best.pt`: a small optimistic bias.
+  Report it next to the result; a strict alternative is picking the last epoch instead.
+
+To do: run the notebook, put `best.pt` in `models/plant-yolov8.pt`, run the fairness check and the comparison; if better,
+switch the plant worker to it (`start-backend.sh --plant-model models/plant-yolov8.onnx`) and rerun
+the plant tests.
+
+Commands (inside WSL, in the `AR` folder):
+```
+bash scripts/start-backend.sh                     # plant only (+ --coco 1, --control)
+~/ar-venv/bin/python tools/fake_client.py --model plant images testdata/plant/*.png
+AR_BIN=~/ar-build/worker-cpp AR_MODEL=models/plant.onnx AR_MODEL_NAME=plant ~/ar-venv/bin/python tools/test_worker_server.py
+~/ar-venv/bin/python tools/test_plant_pipeline.py
+bash scripts/stop-backend.sh
+```
+From Windows: `tools/.venv/Scripts/python tools/compare_plant.py`, `tools/export_plant_onnx.py`,
+`tools/eval_plant_models.py --new ...`.
 
 ---
 
-## Step 8: Moving to the glasses
+## Step 8: Android app on the emulator, shaped like the glasses
 
-**Goal:** the same Android app on the Goolton glasses.
+**Goal:** the real client, built and tested on the Android emulator configured to act like the
+glasses. **No phone step** (decided 2026-11-17): the phone was only ever a stand-in for the
+glasses, so the app goes from the emulator straight to the glasses in Step 9.
 
-- **Plan A:** install the Android app on WEBB OS. Swap CameraX for the Goolton SDK camera,
-  and adapt the popup to the glasses display (position, size, contrast).
-- **Plan B (if the SDK blocks camera access):** the Android app stays on a paired phone, and
-  the glasses connect over USB-C/DP.
-- Field test: measure Wi-Fi and hotspot reliability and latency in the real setting
-  (farm, field, greenhouse). Record video there, to replay later through `FileSource`.
-- Decide what the glasses should actually detect (see `ARCHITECTURE.md` section 8).
+**Before starting** (checked 2026-11-17):
+- Android Studio + SDK installed (Android 29–34, build-tools 34, Android 14 x86_64 system image).
+  No download needed for the emulator itself; the Android build libraries need ~1–1.5 GB
+  (16 GB free).
+- **Network (corrected 2026-11-18, found in 8.2):** `10.0.2.2` does **NOT** reach the backend on
+  this Windows 10 PC. The emulator reaches Windows' **IPv4** localhost through `10.0.2.2`, but WSL's
+  relay only listens on **IPv6** localhost (`::1`), so the connection stalls. (The earlier "verified"
+  check used Redis and passed for another reason.) **Working route, no admin needed: WSL's own IP**
+  (`wsl hostname -I`, e.g. `172.22.36.122`; it changes after a reboot), given to the app at launch:
+  `adb shell am start -n com.soufiane.ar.glasses/.MainActivity --es host <WSL IP> --ei port 50051`
+  (the settings screen in 8.6 makes it permanent). Alternative with admin rights: a Windows
+  `netsh interface portproxy` from `127.0.0.1:50051` to WSL - needed for the glasses anyway (Step 9).
+- **The backend must run in a WSL session that stays open:** WSL shuts down (and clears `/tmp`)
+  when no session is attached, killing what `start-backend.sh` started in the background. Run it
+  from a WSL terminal and keep that terminal open.
+- **RAM (8 GB laptop) is the main risk:** WSL ~4 GB + Android Studio ~2 GB + emulator ~2–3 GB.
+  Give the emulator 2 GB, close Chrome, and run a light backend while developing (few workers).
+  If still too slow, cap WSL's memory (`.wslconfig`).
+  **Measured in 8.1–8.2:** the emulator alone takes ~2.9 GB; with the backend and a plant
+  inspection running, Android's own System UI became unresponsive ("isn't responding" dialog).
+  Working order that never runs all three at once: **close the emulator → build the app (Gradle
+  needs ~1.5 GB) → stop Gradle (`gradlew --stop`) → start backend + emulator → install → test.**
+  Idle Gradle daemons (also the scheduler's, inside WSL: ~1.4 GB) must be stopped. Close IntelliJ
+  and browsers before starting the emulator.
 
-**Done when:** the wearer sees a correct popup on the glasses during a walk-around.
+**Make the emulator act like the glasses:**
+- A virtual device with the glasses' screen: landscape, the chosen Goolton model's resolution
+  (until the model is chosen: 1920×1080 landscape).
+- **Designed for a see-through display:** on optical AR glasses black pixels are transparent, so
+  a black background with only a bright, high-contrast popup in the top-right corner.
+- **Low minimum Android version** (e.g. Android 8–9): the Android version under WEBB OS is
+  unknown, and the app must install there.
+
+**What the app does** (seen from the wearer):
+- **Main mode: plant inspection ("look and hold").** The wearer looks at a leaf and holds still;
+  the app sends that frame to the plant model; a popup in the top-right corner shows the result,
+  e.g. "Tomato late blight 0.87", or "Healthy leaf". A small indicator shows "checking...".
+- **Pipeline test mode: COCO stream.** Continuous detection of `person, cow, sheep, horse, bird,
+  dog` (8 fps): used to test the streaming pipeline, not the goal.
+- A fully black screen otherwise (see-through on the glasses), a small status dot (connected /
+  reconnecting / no server), a settings screen.
+
+Behind the scenes: take a frame → shrink it, JPEG → send it to the Java scheduler over gRPC with
+the model to use (`plant` or `default`) → get the detections back → decide what to show. At most
+1–2 frames in flight; new frames are dropped while busy.
+
+**Where images come from on the PC:**
+- **`FileSource` (main test source):** the app plays a video or images as if they came from a
+  camera, so the expected detections are known:
+  - **plant material from Step 7.1** (diseased and healthy leaves, panned/zoomed videos);
+  - **moving farm footage** in `testdata/moving/` (free Mixkit clips, 24 fps, 1280×720), for
+    the COCO stream: `couple-walking-among-cows-41565.mp4` (2 `person` every second + 1–5
+    `cow`), `calves-feeding-meadow-41404.mp4` (1–8 `cow`, some calves labeled `sheep`);
+  - `loop.mp4` (from soufiane-easy) is a slideshow of still photos: known images only, no motion.
+- **The PC webcam (`CameraXSource`, 8.7):** the emulator can use the webcam as its camera. Hold
+  a real leaf (or a printed / on-screen photo of a diseased leaf) in front of it and move it:
+  real camera, real movement.
+
+**Sub-steps:**
+
+| # | Sub-step | What you get | Done when |
+|---|---|---|---|
+| **8.0** ✅ | Prep | Virtual device **`AR_Glasses_API34`** (landscape 1920×1080, 2 GB RAM, no frame, PC webcam as its back camera); the light backend = `scripts/start-backend.sh` (plant only; `--coco 1`; on the busy laptop `JAVA_OPTS=-Xmx192m ... --plant-threads 2`) | **Done:** boots in ~40–75 s; acceleration through WHPX - ignore the emulator's "disable Hyper-V" message, WSL needs Hyper-V |
+| **8.1** ✅ | Project skeleton | `android-app/` in Kotlin, minimum Android 8 (API 26), gRPC (grpc-okhttp, protobuf-lite) generated from the shared `.proto`; built with Android Studio's JDK 17 (the system Java 26 is too new for the Android build tools) | **Done:** installs on the emulator, black 1920×1080 landscape screen, no system bars, grey status line |
+| **8.2** ✅ | First connection | Sends ONE diseased-leaf image (`assets/test-leaf.png`, model `plant`) to the scheduler (WSL IP, see above) and shows the answer top-right; the same answer goes to logcat (tag `ARGlasses`, line `RESULT ...`) for tests | **Done:** answer identical to `worker-cli` (13 detections, "Corn leaf blight 0.9712"...). First round trip 8.0 s = backend 3.1 s (plant, 2 threads, overloaded laptop) + ~5 s first-connection setup on the slow emulator |
+| **8.3** ✅ | Streaming from a file (`FileSource`) + **debug view** | `FileSource` plays a video from the app's files folder at 8 fps (decoded ahead into ≤640 px frames, real-time position, looping); `StreamController`: JPEG q80, ≤2 frames in flight, drop when busy, match by `frame_id`, a frame with no answer after 5 s counts as **lost** and frees its slot; `DebugView`: frame + boxes + stats; `STATS` line in logcat every 5 s | **Done:** on `couple-walking-among-cows-41565.mp4` the boxes follow the walking couple and cows, trailing 1–2 frames; app vs scheduler: 113 sent / **113 received**, 111 answered (2 in flight at app stop), 0 lost; OK 107/109 (98%) with the dev deadline 1000 ms; round trip p50 884 ms = backend 505 ms (COCO worker starved by the emulator, normally ~100) + 396 ms emulator networking/app; ~2 OK answers/s |
+| **8.4** ✅ | Plant inspection "look and hold" + **vote over several frames** | `InspectController`: hold = 40×22 grey thumbnail change < 5 for 4 frames (0.5 s at 8 fps; calibrated on the videos: holding p95 2.5, moving median 45); then ONE frame at a time to `plant` (JPEG q90), up to 2 votes while the view stays still; verdict = confidence-weighted vote (disease / healthy / no leaf / "unsure: A or B" / failed); no re-check of the same leaf until the view moves; wearer sees "checking leaf... (n/2)" then the verdict top-right; logcat `INSPECT_START/VOTE/RESULT`. Launch: `--es source video:corn-look-and-hold-6s.mp4 --es mode inspect` | **Done:** on the 6 s-hold videos (`make_plant_videos.py --hold 6 --suffix=-6s`): **14/14 holds inspected, 0 false starts while moving, 8/14 correct** (= the model's Step 7 score; the app adds no errors - wrong ones are model mistakes, e.g. potato late blight -> "Blueberry leaf"); hold → verdict p50 8.4 s, max 10.5 s with 2 votes (each plant frame 3.4–5.4 s backend because the emulator eats the CPU; ~2–2.5 s without it). Dev backend: `start-backend.sh --plant-threads 3 --plant-deadline-ms 8000` (at 3500 ms every plant frame was DROPPED_DEADLINE with the emulator running). Better accuracy = 7.6 (YOLOv8 retrain) |
+| **8.5** ✅ | The popup | Black screen (debug view OFF by default, `--ez debug true` to see frame/boxes/stats); `Popup`: top-right, black fill + coloured border (orange disease, green healthy, yellow unsure/below threshold, grey none/failed), fade in 150 ms, hold 3 s, fade out 500 ms; the same answer again only extends it (no re-animation = no flicker); minimum confidence per model (`MIN_CONFIDENCE`: plant 0.40, COCO 0.50; `--ef minconf`), below it "Not sure - look closer"; small grey "checking leaf... (n/2)" bottom-right; stream mode (COCO): popup only when the same top label comes twice in a row; logcat `POPUP_SHOW/EXTEND/HIDE/VERDICT` | **Done:** 3 videos, 14 holds: **14/14 popups, text = verdict 14/14, 0 flicker, on screen 3.5–3.6 s**, then fully black; correct 8/14 (model level). **Bug found and fixed:** if the 1st vote's answer arrived just as the view started moving, the check never ended and no leaf was inspected again (potato run stopped after 2 leaves) - now decides with the votes it has; lost-answer timeout 12 s (must exceed the backend's 8 s dev plant deadline). Unit tests: vote, disease words, the stuck-check regression (`app/src/test`, 8.6 round). Stream-mode popup built, measured in 8.8 (no RAM for a COCO worker next to the emulator) |
+| **8.6** ✅ | Settings + lifecycle | `AppSettings` (SharedPreferences): server host/port, source, mode (default `inspect`), stream model, fps, votes, debug, popup min confidence, COCO popup classes; defaults < saved < launch extras, and **launch extras are saved** (one `adb shell am start ... --es host <ip>` configures the glasses for good); `SettingsActivity` (long-press on the screen = glasses touchpad, or the menu key; lists the videos in the app's folder); pipeline runs only while the app is in front (`onResume`/`onPause`), answers of a stopped pipeline dropped, decoded video reused on return, setups one at a time; screen kept on; 22 JVM unit tests (`gradlew testDebugUnitTest`: vote, inspection state machine incl. the 8.5 stuck-check regression - verified to fail with the bug put back -, popup rules, settings validation) | **Done:** settings survive an app restart (from extras and from a screen edit: votes 2→3 → `changed=[votes]`, kept after force-stop); long-press and menu key open settings; HOME while streaming → 0 frames sent after the stop, session closed cleanly; leaving while the video loads → `PIPELINE_DROPPED`, no session; back → restart in 0.4 s without re-decoding. **Bugs found and fixed:** stop came 3.7 s after HOME (`onStop` waits for the home screen to draw) with a frame + popup slipping out → `onPause`; new extras on the running app started the pipeline twice (one stream untracked) → one restart, 1 session; the same video decoded twice in parallel (~95 s) → one setup at a time. Known: a decoded test video holds ~260 MB of frames → shrink in 8.7 |
+| **8.7** | Robustness + webcam + reality check | Reconnects by itself, survives a backend restart, slow/lossy network (emulator network settings), never shows stale results; the PC webcam as the camera (`CameraXSource`); **1–2 short real field clips** (corn/tomato/potato, free stock) played through `FileSource` | Survives a scheduler restart and bad-network simulation; a leaf held in front of the webcam (printed or on a screen) gets inspected; on the real clips: answers make sense and wind-blown leaves don't trigger endless checks (not scored - no ground truth) |
+| **8.8** | Measure + document | Latency on the emulator for both modes, docs updated | Step 8's overall "done when" below is met |
+
+**Test videos - what each one is for:**
+| Video | Kind | Used for | Ground truth |
+|---|---|---|---|
+| `couple-walking-among-cows-41565.mp4` | real stock footage | 8.3 streaming, COCO: boxes follow motion (pipeline test) | none needed |
+| `{corn,tomato,potato}-look-and-hold.mp4` | simulated from PlantDoc leaf photos: the view pans (motion blur) and stops on each leaf with a small shake | Step 7 backend tests (2 s stops) | timeline JSON: stop times + expected disease |
+| `...-look-and-hold-6s.mp4` | same, 6 s stops | 8.4 app inspection (a check takes several seconds on the emulator) | same |
+| real field clips (8.7, to find) | real stock footage | reality check: light, clutter, many leaves, wind | none - judged by eye |
+
+The simulated plant videos stay **the benchmark** (scored automatically, identical for every model
+comparison, e.g. 7.6). They do not test real field conditions or unseen leaves - that is what the
+8.7 real clips, the webcam, and Step 9's glasses camera are for. No need to search for videos before 8.7.
+
+**Lessons from 8.0–8.3 (dev laptop):**
+- `adb push` the test video only after the app has run once (it creates its files folder); pushing
+  earlier puts the file in the wrong place ("video not found").
+- With the emulator running, the 1-thread COCO worker missed every 300 ms deadline and the boxes
+  froze on an 11 s old answer. Dev setting: `start-backend.sh --coco 1 --coco-threads 3 --deadline-ms 1000`
+  (1000 ms for COCO on this laptop only; a real server keeps 300 ms).
+- A backend that disappears without an error left 2 frames "in flight" forever, so the app dropped
+  every later frame: fixed by the 5 s "lost" timeout in `StreamController`.
+- Android's own "System UI isn't responding" dialog appears regularly: the laptop is past its limit
+  (emulator ~2.9 GB + software-rendered 1920×1080). Not our app. Possible relief: the debug view
+  redraws the full frame even for dropped frames (8×/s) - redraw only when something changed.
+- Shell scripts must keep Unix line endings (`.gitattributes`); a CRLF `start-backend.sh` fails with
+  `set: pipefail: invalid option name`.
+
+Order: 8.0 → 8.3 builds the pipeline, **8.4 is the core feature**, 8.5 → 8.7 polish and harden
+it, 8.8 closes the step. `GooltonSource` (the glasses camera) comes in Step 9, behind the same
+`FrameSource` interface.
+
+Optional, if the app needs server-side settings: a `/config` endpoint in the control plane
+(moved from Step 6).
+
+What the emulator can't tell (first tested on the glasses in Step 9): real camera (focus on a
+close leaf, lighting, head movement), real Wi-Fi latency, the real chip (heat, battery).
+Mitigation: replay recorded real footage through `FileSource` as soon as some exists.
+
+**Done when:** on the glasses-shaped emulator, looking at a diseased leaf (file or webcam) shows
+the right disease popup within the plant deadline, the COCO stream shows the right popups on the
+moving videos, and the app recovers by itself from a backend restart and from simulated bad
+network.
+
+---
+
+## Step 9: Moving to the glasses
+
+**Goal:** the same Android app on the Goolton glasses. This is the **first real-world test**
+(camera, Wi-Fi and hardware at once), since there is no phone step.
+
+**Before starting:**
+- The glasses can't reach the backend inside WSL directly (WSL2 NAT on Windows 10). On Windows,
+  forward the Java scheduler's port into WSL (`netsh interface portproxy`) and allow it in
+  Windows Firewall: one-time setup, needs admin. WSL's IP changes on every reboot, so the
+  forwarding needs a small script to refresh it. The glasses must be on the same Wi-Fi as the
+  PC (currently `192.168.1.2`), or use one of the setups in `ARCHITECTURE.md` section 6b.
+
+Work:
+- **Plan A:** install the Android app on WEBB OS. Add `GooltonSource` (the Goolton SDK camera)
+  behind `FrameSource`, and adjust the popup to the real display (position, size, contrast).
+- **Plan B (if the SDK blocks camera access):** the Android app runs on a paired Android phone,
+  and the glasses connect over USB-C/DP. This is the only case where a phone is needed.
+- **Check the glasses camera can focus on a leaf close up** (the plant model needs the leaf to
+  fill the frame).
+- Field test: inspect real leaves on a farm or in a greenhouse; measure Wi-Fi / hotspot
+  reliability and latency. Record video there, to replay later through `FileSource`.
+
+**Done when:** the wearer looks at a diseased leaf and sees the right disease popup on the
+glasses, in a real field or greenhouse.
 
 ---
 
 ## Later: Stream + Local Model
 
-Not part of v1. It starts only after Step 8, with a benchmark of YOLO FPS on the real
+Not part of v1. It starts only after Step 9, with a benchmark of YOLO FPS on the real
 glasses chipset. See `README-AR.md` → Development plan.

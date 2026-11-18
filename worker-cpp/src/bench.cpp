@@ -19,7 +19,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "yolov8_detector.h"
+#include "detector.h"
 
 namespace {
 
@@ -89,10 +89,11 @@ int main(int argc, char** argv) {
         std::printf("|---|---|---|---|---|---|---|---|---|\n");
 
         for (const int threads : thread_counts) {
-            ar::YoloV8Config cfg;
+            ar::DetectorOptions cfg;
             cfg.model_path = model;
             cfg.threads = threads;
-            ar::YoloV8Detector det(cfg);
+            const auto det_ptr = ar::load_detector(cfg);
+            ar::Detector& det = *det_ptr;
 
             for (int i = 0; i < warmup; ++i) det.detect_encoded(jpeg.data(), jpeg.size());
 

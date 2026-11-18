@@ -32,7 +32,14 @@ import grpc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(ROOT, "tools", "_gen")
-MODEL = os.path.join(ROOT, "models", "yolov8n.onnx")
+# Which model to test (Step 7: the same suite runs for both detector types):
+#   default: COCO YOLOv8n            AR_MODEL=models/plant.onnx AR_MODEL_NAME=plant: the plant model
+MODEL = os.path.join(ROOT, os.environ.get("AR_MODEL", os.path.join("models", "yolov8n.onnx")))
+MODEL_NAME = os.environ.get("AR_MODEL_NAME", "default")
+PLANT = MODEL_NAME == "plant"
+# per-call timeout for normal frames: the plant model takes seconds per image on this CPU
+CALL_TIMEOUT = 60 if PLANT else 10
+SAMPLE = "testdata/plant/corn-leaf-blight-01.png" if PLANT else "testdata/land/cow-attack-01.png"
 # Where the built programs are. Windows: worker-cpp/build/Release.
 # Linux / WSL: the build folder from worker-cpp/CMakeLists.txt, e.g. AR_BIN=~/ar-build/worker-cpp
 BIN = os.environ.get("AR_BIN") or os.path.join(ROOT, "worker-cpp", "build", "Release")
@@ -89,7 +96,7 @@ def check(name, ok, detail=""):
 def start_worker(log_lines):
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     proc = subprocess.Popen(
-        [SERVER, "--model", MODEL, "--port", str(WORKER_PORT), "--worker-id", "worker-test",
+        [SERVER, "--model", MODEL, "--name", MODEL_NAME, "--port", str(WORKER_PORT), "--worker-id", "worker-test",
          "--threads", "2", "--max-queue", "2", "--scheduler", f"127.0.0.1:{SCHED_PORT}"],
         stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, creationflags=flags)
     ready = threading.Event()
@@ -107,14 +114,17 @@ def start_worker(log_lines):
     return proc
 
 
-def frame(fid, data, models=("default",)):
+def frame(fid, data, models=None):
+    models = models if models is not None else (MODEL_NAME,)
     return pb.Frame(session_id="test", frame_id=fid, captured_at_ms=int(time.time() * 1000),
                     jpeg=data, models=list(models))
 
 
 def main():
     os.chdir(ROOT)
-    images = sorted(glob.glob("testdata/*/*.png") + glob.glob("testdata/*/*.jpg"))
+    images = (sorted(glob.glob("testdata/plant/*.png")) if PLANT
+              else sorted(glob.glob("testdata/*/*.png") + glob.glob("testdata/*/*.jpg")))
+    images = [p.replace("\\", "/") for p in images if "/plant/" not in p.replace("\\", "/") or PLANT]
     images = [p.replace("\\", "/") for p in images]
 
     fake = FakeScheduler()
@@ -131,17 +141,17 @@ def main():
     check("heartbeats received", len(fake.beats) >= 2, f"{len(fake.beats)} in 2.5 s")
     if hb:
         check("heartbeat fields", hb.worker_id == "worker-test" and hb.address == f"127.0.0.1:{WORKER_PORT}"
-              and list(hb.models) == ["default"] and hb.threads == 2,
+              and list(hb.models) == [MODEL_NAME] and hb.threads == 2,
               f"id={hb.worker_id} addr={hb.address} models={list(hb.models)} threads={hb.threads}")
 
     # 2. same results as worker-cli ---------------------------------------------
     print("\n2. gRPC Detect == worker-cli, on every test image")
-    cli = subprocess.run([CLI, "--model", MODEL, *images], capture_output=True, text=True, check=True).stdout
+    cli = subprocess.run([CLI, "--model", MODEL, "--name", MODEL_NAME, *images], capture_output=True, text=True, check=True).stdout
     expected = {json.loads(l)["file"]: json.loads(l) for l in cli.splitlines() if l.strip()}
     all_same, total_dets, infer = True, 0, []
     for i, path in enumerate(images):
         with open(path, "rb") as f:
-            res = stub.Detect(frame(i, f.read()), timeout=10)
+            res = stub.Detect(frame(i, f.read()), timeout=CALL_TIMEOUT)
         exp = expected[path]["detections"]
         got = list(res.detections)
         same = res.status == pb.OK and len(got) == len(exp) and all(
@@ -163,7 +173,7 @@ def main():
     res = stub.Detect(frame(101, b""), timeout=10)
     check("empty -> BAD_FRAME", res.status == pb.BAD_FRAME, res.error)
     with open(images[0], "rb") as f:
-        res = stub.Detect(frame(102, f.read()), timeout=10)
+        res = stub.Detect(frame(102, f.read()), timeout=CALL_TIMEOUT)
     check("still serving after bad frames", res.status == pb.OK)
 
     # 4. unknown model -------------------------------------------------------------
@@ -173,9 +183,9 @@ def main():
 
     # 5. overload --------------------------------------------------------------------
     print("\n5. overload: 10 frames at once (1 running + 2 queued allowed)")
-    with open("testdata/land/cow-attack-01.png", "rb") as f:
+    with open(SAMPLE, "rb") as f:
         cow = f.read()
-    futures = [stub.Detect.future(frame(300 + i, cow), timeout=30) for i in range(10)]
+    futures = [stub.Detect.future(frame(300 + i, cow), timeout=10 * CALL_TIMEOUT) for i in range(10)]
     ok = rejected = other = 0
     for fu in futures:
         try:
@@ -200,14 +210,14 @@ def main():
             codes.append(e.code().name)
     check("all 3 -> DEADLINE_EXCEEDED", codes.count("DEADLINE_EXCEEDED") == 3, ", ".join(codes))
     time.sleep(1.0)
-    res = stub.Detect(frame(410, cow), timeout=10)
-    check("normal frame works right after", res.status == pb.OK, f"{len(res.detections)} cows")
+    res = stub.Detect(frame(410, cow), timeout=CALL_TIMEOUT)
+    check("normal frame works right after", res.status == pb.OK, f"{len(res.detections)} detections")
 
     # 7. scheduler down, then back -------------------------------------------------------
     print("\n7. scheduler goes down, then comes back")
     sched.stop(0).wait()
     time.sleep(2.5)
-    res = stub.Detect(frame(500, cow), timeout=10)
+    res = stub.Detect(frame(500, cow), timeout=CALL_TIMEOUT)
     check("worker keeps serving with no scheduler", res.status == pb.OK)
     check("worker logged that the scheduler is unreachable", any("unreachable" in l for l in log))
     n_before = len(fake.beats)

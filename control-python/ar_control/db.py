@@ -49,6 +49,7 @@ alert_rule = Table(
     Column("id", Integer, primary_key=True),
     Column("name", String, nullable=False, unique=True),
     Column("label", String, nullable=False),
+    Column("match", String, nullable=False, server_default="exact"),   # 'exact' or 'contains' (0002)
     Column("min_confidence", Float, nullable=False),
     Column("min_count", Integer, nullable=False),
     Column("cooldown_seconds", Integer, nullable=False),

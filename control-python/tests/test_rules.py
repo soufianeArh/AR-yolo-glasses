@@ -102,3 +102,27 @@ def test_backlog_uses_frame_time_not_processing_time(engine):
     raised = sum(len(run(engine, rules, [Hit("cow", 0.9)], at=T0 + timedelta(seconds=s), frame_id=s))
                  for s in range(0, 30))      # 30 s of frames, processed in a blink
     assert raised == 3                       # t=0, t=10, t=20
+
+
+def test_contains_rule_covers_every_blight(engine):
+    """Step 7: one rule for all blights, whatever the crop (plant-disease model labels)."""
+    add_rule(engine, name="any-blight", label="blight", match="contains", min_confidence=0.5, cooldown_seconds=0)
+    rules = RuleEngine(0)
+    for i, lab in enumerate(["Corn leaf blight", "Tomato leaf late blight", "Potato leaf early blight"]):
+        raised = run(engine, rules, [Hit(lab, 0.9)], at=T0 + timedelta(seconds=i), frame_id=i)
+        assert len(raised) == 1 and raised[0]["label"] == lab      # the label the model emitted
+    assert run(engine, rules, [Hit("Tomato leaf", 0.95)], at=T0 + timedelta(seconds=9), frame_id=9) == []
+    assert run(engine, rules, [Hit("Corn rust leaf", 0.95)], at=T0 + timedelta(seconds=10), frame_id=10) == []
+
+
+def test_contains_counts_all_matching_labels_and_reports_the_most_confident(engine):
+    add_rule(engine, name="any-blight", label="blight", match="contains", min_count=2, cooldown_seconds=0)
+    raised = run(engine, RuleEngine(0), [Hit("Corn leaf blight", 0.6), Hit("Corn Gray leaf spot", 0.9),
+                                         Hit("Potato leaf late blight", 0.8)])
+    assert len(raised) == 1 and raised[0]["count"] == 2
+    assert raised[0]["label"] == "Potato leaf late blight" and abs(raised[0]["max_confidence"] - 0.8) < 1e-9
+
+
+def test_exact_rule_does_not_match_a_longer_label(engine):
+    add_rule(engine, name="exact-blight", label="blight", match="exact")
+    assert run(engine, RuleEngine(0), [Hit("Corn leaf blight", 0.99)]) == []

@@ -30,3 +30,16 @@ cmake-build-*/
 # Python control plane: code generated from the .proto at import
 control-python/ar_control/_gen/
 .pytest_cache/
+
+# Plant-disease model (copied from soufiane-easy, 120 MB)
+models/plant-disease/
+
+# Training data (PlantDoc, ~1 GB) and converted YOLO datasets
+datasets/
+runs/
+
+# Android build output and machine-specific settings
+android-app/local.properties
+android-app/.gradle/
+android-app/build/
+android-app/app/build/

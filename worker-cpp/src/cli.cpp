@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "yolov8_detector.h"
+#include "detector.h"
 
 namespace {
 
@@ -38,14 +38,14 @@ std::vector<std::uint8_t> read_file(const std::string& path) {
 
 int usage() {
     std::cerr << "usage: worker-cli --model <file.onnx> [--name default] [--conf 0.4] [--iou 0.5] "
-                 "[--threads 2] <image> [<image>...]\n";
+                 "[--threads 2] [--model-type auto|yolov8|yolos] <image> [<image>...]\n";
     return 2;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    ar::YoloV8Config cfg;
+    ar::DetectorOptions cfg;
     std::vector<std::string> images;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
             else if (a == "--conf") cfg.conf_threshold = std::stof(next());
             else if (a == "--iou") cfg.iou_threshold = std::stof(next());
             else if (a == "--threads") cfg.threads = std::stoi(next());
+            else if (a == "--model-type") cfg.model_type = next();
             else if (a.rfind("--", 0) == 0) return usage();
             else images.push_back(a);
         } catch (const std::exception& e) {
@@ -69,7 +70,8 @@ int main(int argc, char** argv) {
     if (cfg.model_path.empty() || images.empty()) return usage();
 
     try {
-        ar::YoloV8Detector detector(cfg);
+        const auto det = ar::load_detector(cfg);
+        ar::Detector& detector = *det;
         for (const auto& path : images) {
             std::ostringstream js;
             js << "{\"file\":\"" << json_escape(path) << "\"";

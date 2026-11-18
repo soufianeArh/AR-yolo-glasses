@@ -87,3 +87,13 @@ def test_detections_and_stats(client, engine):
 def test_health(client):
     h = client.get("/health").json()
     assert h["database"] == "ok" and h["redis"] == "ok"
+
+
+def test_contains_rule_through_the_api(client):
+    r = client.post("/rules", json={"name": "any-blight", "label": "Blight", "match": "contains",
+                                    "min_confidence": 0.5, "severity": "high"})
+    assert r.status_code == 201 and r.json()["match"] == "contains" and r.json()["label"] == "blight"
+    assert client.post("/rules", json={**RULE, "name": "x", "match": "regex"}).status_code == 422
+    assert client.post("/rules", json={**RULE, "name": "y"}).json()["match"] == "exact"     # default
+    rid = r.json()["id"]
+    assert client.patch(f"/rules/{rid}", json={"match": "exact"}).json()["match"] == "exact"

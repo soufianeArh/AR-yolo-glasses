@@ -1,0 +1,376 @@
+[
+ {
+  "model": "current (YOLOS, soufiane-easy)",
+  "path": "models/plant.onnx",
+  "accuracy": "21/44",
+  "accuracy_pct": 48,
+  "stability": "8/14",
+  "infer_ms_avg": 1638.2,
+  "infer_ms_p95": 1834.6,
+  "per_image": {
+   "corn-leaf-blight-01.png": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-leaf-blight-02.png": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-gray-leaf-spot-1.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Corn leaf blight"
+   },
+   "corn-gray-leaf-spot-2.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Corn Gray leaf spot"
+   },
+   "corn-gray-leaf-spot-3.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Corn leaf blight"
+   },
+   "corn-leaf-blight-1.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Corn Gray leaf spot"
+   },
+   "corn-leaf-blight-2.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Corn Gray leaf spot"
+   },
+   "corn-leaf-blight-3.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-rust-leaf-1.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Corn rust leaf"
+   },
+   "corn-rust-leaf-2.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Corn rust leaf"
+   },
+   "corn-rust-leaf-3.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Corn rust leaf"
+   },
+   "potato-leaf-early-blight-1.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "Tomato Early blight leaf"
+   },
+   "potato-leaf-early-blight-2.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "Potato leaf early blight"
+   },
+   "potato-leaf-early-blight-3.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "-"
+   },
+   "potato-leaf-late-blight-1.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Blueberry leaf"
+   },
+   "potato-leaf-late-blight-2.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Potato leaf late blight"
+   },
+   "potato-leaf-late-blight-3.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Potato leaf late blight"
+   },
+   "tomato-early-blight-leaf-1.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "Tomato mold leaf"
+   },
+   "tomato-early-blight-leaf-2.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "Tomato leaf bacterial spot"
+   },
+   "tomato-early-blight-leaf-3.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "-"
+   },
+   "tomato-leaf-1.jpg": {
+    "expected": "Tomato leaf",
+    "top": "Strawberry leaf"
+   },
+   "tomato-leaf-2.jpg": {
+    "expected": "Tomato leaf",
+    "top": "Tomato leaf"
+   },
+   "tomato-leaf-3.jpg": {
+    "expected": "Tomato leaf",
+    "top": "-"
+   },
+   "tomato-leaf-bacterial-spot-1.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "Tomato Septoria leaf spot"
+   },
+   "tomato-leaf-bacterial-spot-2.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "-"
+   },
+   "tomato-leaf-bacterial-spot-3.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "Tomato leaf late blight"
+   },
+   "tomato-leaf-late-blight-1.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Tomato leaf late blight"
+   },
+   "tomato-leaf-late-blight-2.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Tomato leaf late blight"
+   },
+   "tomato-leaf-late-blight-3.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Tomato leaf late blight"
+   },
+   "tomato-leaf-mosaic-virus-1.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Tomato mold leaf"
+   },
+   "tomato-leaf-mosaic-virus-2.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Tomato leaf mosaic virus"
+   },
+   "tomato-leaf-mosaic-virus-3.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Tomato leaf"
+   },
+   "tomato-leaf-yellow-virus-1.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Tomato leaf yellow virus"
+   },
+   "tomato-leaf-yellow-virus-2.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Tomato leaf yellow virus"
+   },
+   "tomato-leaf-yellow-virus-3.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Tomato leaf yellow virus"
+   },
+   "tomato-mold-leaf-1.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Tomato leaf bacterial spot"
+   },
+   "tomato-mold-leaf-2.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Bell_pepper leaf spot"
+   },
+   "tomato-mold-leaf-3.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Tomato Early blight leaf"
+   },
+   "tomato-septoria-leaf-spot-1.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "Tomato leaf bacterial spot"
+   },
+   "tomato-septoria-leaf-spot-2.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "Tomato Septoria leaf spot"
+   },
+   "tomato-septoria-leaf-spot-3.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "Tomato Septoria leaf spot"
+   },
+   "tomato-leaf-blight-01.png": {
+    "expected": "Tomato leaf late blight",
+    "top": "Potato leaf late blight"
+   },
+   "tomato-leaf-blight-02.png": {
+    "expected": "Tomato leaf late blight",
+    "top": "Potato leaf late blight"
+   },
+   "tomato-leaf-healthy-01.png": {
+    "expected": "Tomato leaf",
+    "top": "Tomato leaf"
+   }
+  }
+ },
+ {
+  "model": "new (YOLOv8, trained)",
+  "path": "runs/detect/runs/smoke/weights/best.onnx",
+  "accuracy": "3/44",
+  "accuracy_pct": 7,
+  "stability": "11/14",
+  "infer_ms_avg": 135.6,
+  "infer_ms_p95": 140.4,
+  "per_image": {
+   "corn-leaf-blight-01.png": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-leaf-blight-02.png": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-gray-leaf-spot-1.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Apple rust leaf"
+   },
+   "corn-gray-leaf-spot-2.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Corn leaf blight"
+   },
+   "corn-gray-leaf-spot-3.jpg": {
+    "expected": "Corn Gray leaf spot",
+    "top": "Potato leaf"
+   },
+   "corn-leaf-blight-1.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Tomato leaf late blight"
+   },
+   "corn-leaf-blight-2.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Corn leaf blight"
+   },
+   "corn-leaf-blight-3.jpg": {
+    "expected": "Corn leaf blight",
+    "top": "Apple rust leaf"
+   },
+   "corn-rust-leaf-1.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Corn leaf blight"
+   },
+   "corn-rust-leaf-2.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Corn leaf blight"
+   },
+   "corn-rust-leaf-3.jpg": {
+    "expected": "Corn rust leaf",
+    "top": "Tomato leaf late blight"
+   },
+   "potato-leaf-early-blight-1.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "Corn leaf blight"
+   },
+   "potato-leaf-early-blight-2.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "Corn leaf blight"
+   },
+   "potato-leaf-early-blight-3.jpg": {
+    "expected": "Potato leaf early blight",
+    "top": "Corn leaf blight"
+   },
+   "potato-leaf-late-blight-1.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Potato leaf"
+   },
+   "potato-leaf-late-blight-2.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Corn leaf blight"
+   },
+   "potato-leaf-late-blight-3.jpg": {
+    "expected": "Potato leaf late blight",
+    "top": "Corn leaf blight"
+   },
+   "tomato-early-blight-leaf-1.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "-"
+   },
+   "tomato-early-blight-leaf-2.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "Potato leaf"
+   },
+   "tomato-early-blight-leaf-3.jpg": {
+    "expected": "Tomato Early blight leaf",
+    "top": "Tomato leaf late blight"
+   },
+   "tomato-leaf-1.jpg": {
+    "expected": "Tomato leaf",
+    "top": "Peach leaf"
+   },
+   "tomato-leaf-2.jpg": {
+    "expected": "Tomato leaf",
+    "top": "Corn leaf blight"
+   },
+   "tomato-leaf-3.jpg": {
+    "expected": "Tomato leaf",
+    "top": "Bell_pepper leaf spot"
+   },
+   "tomato-leaf-bacterial-spot-1.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "Potato leaf"
+   },
+   "tomato-leaf-bacterial-spot-2.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "grape leaf black rot"
+   },
+   "tomato-leaf-bacterial-spot-3.jpg": {
+    "expected": "Tomato leaf bacterial spot",
+    "top": "Peach leaf"
+   },
+   "tomato-leaf-late-blight-1.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Apple rust leaf"
+   },
+   "tomato-leaf-late-blight-2.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Apple rust leaf"
+   },
+   "tomato-leaf-late-blight-3.jpg": {
+    "expected": "Tomato leaf late blight",
+    "top": "Corn leaf blight"
+   },
+   "tomato-leaf-mosaic-virus-1.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Corn leaf blight"
+   },
+   "tomato-leaf-mosaic-virus-2.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Cherry leaf"
+   },
+   "tomato-leaf-mosaic-virus-3.jpg": {
+    "expected": "Tomato leaf mosaic virus",
+    "top": "Peach leaf"
+   },
+   "tomato-leaf-yellow-virus-1.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Cherry leaf"
+   },
+   "tomato-leaf-yellow-virus-2.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Corn leaf blight"
+   },
+   "tomato-leaf-yellow-virus-3.jpg": {
+    "expected": "Tomato leaf yellow virus",
+    "top": "Corn leaf blight"
+   },
+   "tomato-mold-leaf-1.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Corn leaf blight"
+   },
+   "tomato-mold-leaf-2.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Corn leaf blight"
+   },
+   "tomato-mold-leaf-3.jpg": {
+    "expected": "Tomato mold leaf",
+    "top": "Peach leaf"
+   },
+   "tomato-septoria-leaf-spot-1.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "Corn leaf blight"
+   },
+   "tomato-septoria-leaf-spot-2.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "grape leaf black rot"
+   },
+   "tomato-septoria-leaf-spot-3.jpg": {
+    "expected": "Tomato Septoria leaf spot",
+    "top": "grape leaf black rot"
+   },
+   "tomato-leaf-blight-01.png": {
+    "expected": "Tomato leaf late blight",
+    "top": "Peach leaf"
+   },
+   "tomato-leaf-blight-02.png": {
+    "expected": "Tomato leaf late blight",
+    "top": "Peach leaf"
+   },
+   "tomato-leaf-healthy-01.png": {
+    "expected": "Tomato leaf",
+    "top": "Apple rust leaf"
+   }
+  }
+ }
+]

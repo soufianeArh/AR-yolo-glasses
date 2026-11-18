@@ -5,14 +5,17 @@
 // detections in ONE shape - the Detection message from proto/ar/v1/detection.proto:
 //   {label, confidence, x1, y1, x2, y2, model}, boxes normalized to 0..1.
 //
-// Swapping YOLOv8 for another model later (e.g. an Apache-licensed one) means
-// writing a new class that implements this interface - nothing else changes.
+// Two implementations today, chosen from the model file by load_detector():
+//   YoloV8Detector  Ultralytics YOLOv8 exports (COCO yolov8n: the pipeline placeholder)
+//   YolosDetector   YOLOS transformer exports (the plant-disease model: the core model)
+// Adding another model family means writing a new class here - nothing else changes.
 //
 // Thread safety: a Detector instance is NOT thread-safe (it reuses its buffers).
 // Use one instance per thread.
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -66,5 +69,24 @@ public:
     // Calling it when nothing is running does nothing.
     virtual void abort_current() {}
 };
+
+// What every detector is configured with.
+struct DetectorOptions {
+    std::string model_path;
+    std::string name = "default";      // model name in the contract (Frame.models / Detection.model)
+    std::string model_type = "auto";   // "auto" (from the model file), "yolov8" or "yolos"
+    float conf_threshold = 0.40f;      // keep a detection only if score > this
+    float iou_threshold = 0.50f;       // NMS IoU (YOLOv8 only; YOLOS has no NMS)
+    int max_detections = 300;
+    int threads = 2;                   // ONNX Runtime intra-op threads
+};
+
+// Opens the model and returns the right detector for it. With model_type "auto", the type comes
+// from the ONNX metadata key "model_type" (our YOLOS export writes "yolos"); a model without it
+// is treated as an Ultralytics YOLOv8 export.
+std::unique_ptr<Detector> load_detector(const DetectorOptions& options);
+
+// The type load_detector() would pick for this file ("yolov8" or "yolos").
+std::string detect_model_type(const std::string& model_path);
 
 }  // namespace ar

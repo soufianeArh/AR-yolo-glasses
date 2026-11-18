@@ -14,6 +14,7 @@ Two modes:
 Usage (inside WSL, from the AR folder):
   ~/ar-venv/bin/python tools/fake_client.py video --video testdata/land/loop.mp4 --fps 8 --seconds 20
   ~/ar-venv/bin/python tools/fake_client.py images testdata/land/*.png
+  ~/ar-venv/bin/python tools/fake_client.py --model plant images testdata/plant/*.png
 """
 import argparse
 import glob
@@ -73,7 +74,8 @@ def percentile(sorted_vals, p):
 class Stream:
     """One session: a request queue feeding the gRPC stream, and a reader for the results."""
 
-    def __init__(self, target, token, max_in_flight):
+    def __init__(self, target, token, max_in_flight, model="default"):
+        self.model = model
         self.channel = grpc.insecure_channel(target, options=[("grpc.max_receive_message_length", 8 << 20),
                                                               ("grpc.max_send_message_length", 8 << 20)])
         self.stub = pbg.FrameStreamStub(self.channel)
@@ -113,7 +115,7 @@ class Stream:
         captured = now_ms()
         with self.lock:
             self.sent_at[frame_id] = captured
-        self.requests.put(pb.Frame(frame_id=frame_id, captured_at_ms=captured, jpeg=jpeg, models=["default"]))
+        self.requests.put(pb.Frame(frame_id=frame_id, captured_at_ms=captured, jpeg=jpeg, models=[self.model]))
         return True
 
     def close(self, timeout=10):
@@ -128,7 +130,7 @@ def run_images(args):
     paths = []
     for pattern in args.paths:
         paths.extend(sorted(glob.glob(pattern)) or [pattern])
-    s = Stream(args.target, args.token, max_in_flight=1)
+    s = Stream(args.target, args.token, max_in_flight=1, model=args.model)
     for i, path in enumerate(paths):
         with open(path, "rb") as f:
             s.try_send(i, f.read(), blocking=True)
@@ -166,7 +168,7 @@ def run_video(args):
     avg_kb = sum(len(f) for f in frames) / len(frames) / 1024
 
     # --burst: a buggy client with no in-flight limit, to test the scheduler's per-session cap.
-    s = Stream(args.target, args.token, 1_000_000 if args.burst else args.max_in_flight)
+    s = Stream(args.target, args.token, 1_000_000 if args.burst else args.max_in_flight, model=args.model)
     period = 1.0 / args.fps
     start = time.perf_counter()
     n = dropped_client = 0
@@ -207,6 +209,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--target", default="127.0.0.1:50051", help="Java scheduler address")
     ap.add_argument("--token", default="fake-device-1", help="device token (authorization header)")
+    ap.add_argument("--model", default="default",
+                    help="model to ask for: default (COCO, pipeline test) or plant (leaf diseases)")
     sub = ap.add_subparsers(dest="mode", required=True)
 
     v = sub.add_parser("video")

@@ -1,0 +1,6 @@
+# Shell scripts run in WSL / Linux: always Unix line endings, even when edited or checked out on
+# Windows (bash fails on CRLF: "set: pipefail: invalid option name").
+*.sh    text eol=lf
+gradlew text eol=lf
+# Windows scripts keep CRLF.
+*.bat   text eol=crlf

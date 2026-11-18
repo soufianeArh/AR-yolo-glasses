@@ -90,7 +90,9 @@ endif()
 # ---------------------------------------------------------------- detector library
 add_library(ar_detector STATIC
   src/detector.cpp
-  src/yolov8_detector.cpp)
+  src/ort_model.cpp
+  src/yolov8_detector.cpp
+  src/yolos_detector.cpp)
 target_include_directories(ar_detector PUBLIC src)
 if(AR_OPENCV_INCLUDE)
   # SYSTEM: OpenCV 4.6's own headers trigger C++20 deprecation warnings that are not ours to fix.
