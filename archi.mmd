@@ -1,0 +1,89 @@
+%% AR Plant Inspector - architecture (Mermaid).
+%% To get an image: open https://mermaid.live, paste this whole file, then Actions -> PNG / SVG.
+%% GitHub also draws it if you put it inside a ```mermaid block in a .md file.
+
+flowchart LR
+    %% ------------------------------------------------------------------ the glasses
+    subgraph APP["Android app - AR glasses (emulator for now)"]
+        direction TB
+        SRC["Frame sources<br/>Camera (Camera2) / demo video (FileSource)"]
+        INS["InspectController<br/>look and hold: still for 0.5 s,<br/>2 frames, vote"]
+        STR["StreamController<br/>every frame, max 2 in flight"]
+        CON["Connection<br/>self-repairing gRPC stream,<br/>backpressure, never stale"]
+        UI["Screens<br/>welcome, demo videos, popup,<br/>boxes, settings, English / 中文"]
+        SRC --> INS
+        SRC --> STR
+        INS --> CON
+        STR --> CON
+        INS --> UI
+        STR --> UI
+    end
+
+    %% ------------------------------------------------------------------ the server
+    subgraph SRV["Server - Linux (WSL Ubuntu on the dev laptop)"]
+        direction LR
+
+        subgraph JAVA["Java scheduler (Java 21, grpc-java)"]
+            direction TB
+            FS["FrameStream service<br/>one stream per device,<br/>session cap 2"]
+            RT["Router<br/>by model, least-loaded,<br/>retry, failover"]
+            DL["Deadlines per model<br/>COCO 300 ms, plant 3.5 s"]
+            PUB["Redis publisher<br/>async, buffered"]
+            WC["WorkerControl<br/>heartbeats, registry"]
+            FS --> RT
+            RT --> DL
+            FS --> PUB
+        end
+
+        subgraph CPP["C++ AI workers (ONNX Runtime, OpenCV)"]
+            direction TB
+            PW["plant worker<br/>YOLOS plant-disease model<br/>31 classes"]
+            CW["COCO worker<br/>YOLOv8n, 80 objects"]
+        end
+
+        REDIS[("Redis Stream<br/>ar:results")]
+
+        subgraph PY["Python control plane (FastAPI, SQLAlchemy)"]
+            direction TB
+            CONS["Consumer<br/>consumer group"]
+            RULES["Rule engine<br/>threshold, quorum,<br/>cooldown per device"]
+            API["REST API :8090<br/>/alerts /rules /stats<br/>/detections /demos"]
+            CONS --> RULES
+        end
+
+        PG[("PostgreSQL<br/>frames, detections,<br/>alerts, rules")]
+    end
+
+    %% ------------------------------------------------------------------ offline
+    subgraph TRAIN["Offline (Google Colab)"]
+        COLAB["Train YOLOv8 on PlantDoc<br/>export ONNX"]
+    end
+
+    USER(["Browser / dashboard"])
+
+    %% ------------------------------------------------------------------ data flow
+    CON <-->|"gRPC two-way stream FrameStream.Stream<br/>JPEG frames to / results back"| FS
+    RT -->|"gRPC InferenceWorker.Detect"| PW
+    RT -->|"gRPC InferenceWorker.Detect"| CW
+    PW -.->|"gRPC WorkerControl.Heartbeat (1/s)"| WC
+    CW -.->|"gRPC WorkerControl.Heartbeat (1/s)"| WC
+    PUB -->|"XADD (async copy)"| REDIS
+    REDIS -->|"XREADGROUP"| CONS
+    CONS -->|"SQL"| PG
+    RULES -->|"alerts"| PG
+    API -->|"SQL"| PG
+    UI -->|"HTTP GET /demos<br/>download demo videos"| API
+    USER -->|"HTTP"| API
+    COLAB -.->|"models/plant.onnx"| PW
+
+    %% ------------------------------------------------------------------ colours
+    classDef app fill:#1f3b2d,stroke:#78ff78,color:#ffffff
+    classDef java fill:#3b2a1f,stroke:#ff963c,color:#ffffff
+    classDef cpp fill:#1f2a3b,stroke:#6fa8ff,color:#ffffff
+    classDef py fill:#2f2a3b,stroke:#c89bff,color:#ffffff
+    classDef store fill:#333333,stroke:#cccccc,color:#ffffff
+    class SRC,INS,STR,CON,UI app
+    class FS,RT,DL,PUB,WC java
+    class PW,CW cpp
+    class CONS,RULES,API py
+    class REDIS,PG store

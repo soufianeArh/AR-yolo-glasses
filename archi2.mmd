@@ -1,0 +1,27 @@
+%% AR Plant Inspector - short architecture, for presentations.
+%% Detailed version: archi.mmd. To get an image: paste into https://mermaid.live -> Actions -> PNG / SVG.
+
+flowchart LR
+    G["👓 AR glasses app<br/>looks at a leaf,<br/>shows the answer"]
+    S["⚙️ Scheduler (Java)<br/>routes each image<br/>to a free AI worker"]
+    W["🧠 AI workers (C++)<br/>plant-disease model<br/>+ object model"]
+    P["📊 Control plane (Python)<br/>history, alert rules,<br/>REST API"]
+    D[("🗄️ Database<br/>PostgreSQL")]
+    U(["👤 Dashboard / team"])
+
+    G -->|"image"| S
+    S -->|"image"| W
+    W -->|"disease + confidence"| S
+    S -->|"answer in ~4 s"| G
+    S -.->|"copy of every result<br/>(Redis, never slows the glasses)"| P
+    P --> D
+    U -->|"alerts, stats"| P
+
+    classDef app fill:#1f3b2d,stroke:#78ff78,color:#ffffff
+    classDef core fill:#3b2a1f,stroke:#ff963c,color:#ffffff
+    classDef ai fill:#1f2a3b,stroke:#6fa8ff,color:#ffffff
+    classDef data fill:#2f2a3b,stroke:#c89bff,color:#ffffff
+    class G app
+    class S core
+    class W ai
+    class P,D,U data
