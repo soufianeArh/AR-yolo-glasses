@@ -47,3 +47,10 @@ android-app/app/build/
 # Demo screen recordings (large videos, keep them out of git)
 demo-recording*
 *.webm
+
+# local docs, not in the repo
+ARCHITECTURE.md
+ROADMAP.md
+archi2.mmd
+README-AR.md
+README-AR-zh.md
