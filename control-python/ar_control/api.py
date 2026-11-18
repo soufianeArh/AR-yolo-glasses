@@ -1,5 +1,6 @@
 """
-REST API of the control plane: history, alerts, rules, health and stats.
+REST API of the control plane: history, alerts, rules, health and stats, and the demo videos
+for the Android app (Step 8.9, ar_control/demos.py).
 
   ~/ar-venv/bin/uvicorn ar_control.api:app --host 0.0.0.0 --port 8090
 
@@ -17,8 +18,10 @@ from sqlalchemy.exc import IntegrityError
 
 from . import settings
 from .db import alert, alert_rule, detection, frame, make_engine
+from .demos import router as demos_router
 
 app = FastAPI(title="AR control plane", version="0.1.0")
+app.include_router(demos_router)
 engine = make_engine()
 _redis = redis.Redis.from_url(settings.REDIS_URL, socket_timeout=1, socket_connect_timeout=1)
 

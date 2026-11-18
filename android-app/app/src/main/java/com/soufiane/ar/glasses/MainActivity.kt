@@ -11,8 +11,11 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.MotionEvent
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import com.soufiane.ar.proto.v1.FrameResult
 import java.io.File
@@ -32,6 +35,12 @@ import java.util.concurrent.Executors
  *     --ei fps 8  --ei votes 2  --ez debug true  --ef minconf 0.4  --es popup_classes "person,cow"
  *     --es crops "corn,tomato,potato"   inspect: only these crops (empty = any plant)
  *     --ez settings true                open the settings screen
+ *
+ * 8.9: opened from the welcome / demo screens. Videos are always shown (demos); the camera image is
+ * shown unless the setting "show camera" is off (optical see-through glasses: black = clear view).
+ * Bottom-left bar: what is playing + Home / Videos / Camera / Pause / Settings. Always visible while
+ * an image is shown; on a black (glasses) screen it appears on a tap or any key and hides after 4 s. Look-and-hold videos with a timeline add "expected: ... ✓/✗" under
+ * each verdict. Back returns to the previous screen.
  *
  * Lifecycle: the pipeline (camera source + gRPC stream) runs only while the app is in front:
  * onResume starts it, onPause stops it (the scheduler sees the session close). onPause, not onStop:
@@ -68,6 +77,16 @@ class MainActivity : Activity() {
     private val setupExecutor = Executors.newSingleThreadExecutor { Thread(it, "pipeline-setup") }
 
     private var cameraAsked = false
+    private lateinit var bar: LinearLayout
+    private lateinit var loading: TextView                         // 8.9: "Loading video... 45%" (demos)
+    private lateinit var pauseButton: Button
+    private lateinit var homeButton: Button
+    private lateinit var cameraButton: Button
+    private lateinit var sourceLabel: TextView
+    private var alwaysShowBar = false
+    private var paused = false
+    @Volatile private var timeline: Timeline? = null
+    private val hideBar = Runnable { bar.visibility = View.GONE }
     private var lastPopupHold = 0
     private var lastStreamResult = -1L
 
@@ -106,7 +125,45 @@ class MainActivity : Activity() {
                 Gravity.BOTTOM or Gravity.START))
             isLongClickable = true
             setOnLongClickListener { openSettings(); true }                  // glasses touchpad: long-press
+            setOnTouchListener { _, e -> if (e.action == MotionEvent.ACTION_DOWN) showBar(); false }
         }
+        homeButton = barButton("⌂  Home") { goHome() }
+        cameraButton = barButton("◉  Camera") { switchToCamera() }
+        pauseButton = barButton("❚❚  Pause") { togglePause() }
+        sourceLabel = TextView(this).apply {
+            setTextColor(Color.rgb(230, 230, 230))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setShadowLayer(4f, 0f, 0f, Color.BLACK)                         // readable on any image
+            setPadding(6, 0, 0, 8)
+        }
+        bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 14, 12, 14)
+            // A solid dark panel: readable over any image (bright slides, sky, text).
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.argb(215, 10, 10, 10)); cornerRadius = 24f
+            }
+            addView(sourceLabel)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(homeButton)
+                addView(barButton("▶  Videos") { openVideos() })
+                addView(cameraButton)
+                addView(pauseButton)
+                addView(barButton("⚙  Settings") { openSettings() })
+            })
+        }
+        loading = TextView(this).apply {
+            setTextColor(Color.rgb(220, 220, 220))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+        }
+        root.addView(loading, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        root.addView(bar, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START)
+            .apply { setMargins(20, 0, 0, 56) })
         setContentView(root)
         hideSystemBars(root)
         applyLaunchExtras(intent)
@@ -126,6 +183,11 @@ class MainActivity : Activity() {
     private fun applyLaunchExtras(i: Intent?): Boolean {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val extras = i?.extras
+        // 8.9: the demo list sends the video's title; remembered per source, for the bar.
+        val title = extras?.getString("title")
+        val titled = extras?.getString("source")
+        if (title != null && titled != null) prefs.edit().putString("title_$titled", title).apply()
+        extras?.remove("title")
         val openSettings = extras?.getBoolean("settings", false) ?: false
         extras?.remove("settings")
         val (s, changed) = AppSettings.load(prefs).withExtras(extras)
@@ -140,7 +202,107 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        paused = false
+        pauseButton.text = "❚❚  Pause"
         startPipeline()
+        showBar()
+    }
+
+    // ------------------------------------------------------------------ icons (8.9)
+
+    private fun barButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextColor(Color.WHITE)
+        minHeight = 0; minimumHeight = 0
+        setPadding(28, 14, 28, 14)
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.rgb(35, 35, 35)); setStroke(2, Color.rgb(110, 110, 110)); cornerRadius = 20f
+        }
+        setOnFocusChangeListener { v, has ->
+            (v.background as android.graphics.drawable.GradientDrawable)
+                .setColor(if (has) Color.rgb(85, 85, 85) else Color.rgb(35, 35, 35))
+            if (has) showBar()
+        }
+        setOnClickListener { onClick(); showBar() }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { setMargins(0, 0, 16, 0) }
+    }
+
+    /** Shows the bar: for good while an image is shown, else for 4 s (any tap or key). */
+    private fun showBar() {
+        bar.visibility = View.VISIBLE
+        bar.removeCallbacks(hideBar)
+        if (!alwaysShowBar) bar.postDelayed(hideBar, 4000)
+    }
+
+    /** What is playing + which buttons make sense; called whenever the pipeline (re)starts. */
+    private fun updateBar() {
+        val s = settings
+        alwaysShowBar = showsFrames(s)
+        cameraButton.visibility = if (s.source == "camera") View.GONE else View.VISIBLE   // only moves that change something
+        val what = if (s.mode == "inspect") "plant inspection" else "object stream"
+        sourceLabel.text = when {
+            s.source == "camera" -> "Live camera  ·  $what"
+            s.source.startsWith("video:") -> {
+                val title = getSharedPreferences(PREFS, MODE_PRIVATE).getString("title_${s.source}", null)
+                    ?: s.source.removePrefix("video:").removeSuffix(".mp4").removeSuffix("-6s").replace('-', ' ')
+                "Video: $title  ·  $what"
+            }
+            else -> "Test image"
+        }
+        showBar()
+    }
+
+    /** Live camera inspection, from wherever we are. */
+    private fun switchToCamera() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val s = AppSettings.load(prefs).copy(source = "camera", mode = "inspect")
+        s.save(prefs)
+        Log.i(TAG, "SETTINGS_SAVED from=button changed=[source] ${s.describe()}")
+        paused = false
+        pauseButton.text = "❚❚  Pause"
+        startPipeline()
+    }
+
+    /** Back to the demo list (the existing one if it is below us: no pile of screens). */
+    private fun openVideos() {
+        startActivity(Intent(this, DemoListActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_BACK) {
+            val wasHidden = bar.visibility != View.VISIBLE
+            showBar()
+            if (wasHidden && event.keyCode != KeyEvent.KEYCODE_MENU) {   // first key only wakes the icons
+                homeButton.requestFocus()
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun goHome() {
+        startActivity(Intent(this, WelcomeActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
+    }
+
+    private fun togglePause() {
+        paused = !paused
+        if (paused) {
+            stopPipeline("paused")
+            pauseButton.text = "▶  Play"
+            answer.setTextColor(Color.rgb(160, 160, 160))
+            answer.text = "paused"
+        } else {
+            pauseButton.text = "❚❚  Pause"
+            startPipeline()
+        }
+        Log.i(TAG, "PAUSE paused=$paused")
     }
 
     override fun onPause() {
@@ -152,6 +314,9 @@ class MainActivity : Activity() {
         setupExecutor.shutdownNow()
         super.onDestroy()
     }
+
+    private fun showsFrames(s: AppSettings) =
+        s.debug || s.source.startsWith("video:") || (s.source == "camera" && s.showCamera)
 
     /** False once the pipeline [gen] was stopped: its late answers must not reach the screen. */
     private fun isCurrent(gen: Int) = synchronized(pipeLock) { gen == generation }
@@ -176,7 +341,13 @@ class MainActivity : Activity() {
         val gen = synchronized(pipeLock) { generation }
         Log.i(TAG, "CONFIG ${settings.describe()}")
         status.visibility = if (settings.debug) View.VISIBLE else View.GONE
-        debugView.visibility = if (settings.debug) View.VISIBLE else View.INVISIBLE
+        // Videos are demos: always shown. The camera: shown unless switched off for see-through glasses.
+        val showFrames = settings.debug || settings.source.startsWith("video:") ||
+            (settings.source == "camera" && settings.showCamera)
+        debugView.visibility = if (showFrames) View.VISIBLE else View.INVISIBLE
+        debugView.boxes = settings.debug || settings.showBoxes
+        debugView.text = settings.debug
+        timeline = null
         answer.text = ""
         connLine = null
         connWasLost = false
@@ -188,6 +359,7 @@ class MainActivity : Activity() {
             s.source == "camera" -> startCamera(gen, s)
             else -> startSingleImage(gen, s)
         }
+        updateBar()
     }
 
     private fun stopPipeline(why: String) {
@@ -223,9 +395,19 @@ class MainActivity : Activity() {
                 Log.i(TAG, "PIPELINE_DROPPED (screen left before loading)")
                 return@execute
             }
+            timeline = Timeline.forVideo(file)
+            if (timeline != null) Log.i(TAG, "TIMELINE ${file.name}: ${timeline!!.holds.size} holds with expected answers")
             val key = "${file.absolutePath}@${s.fps}"
-            val src = cachedSource?.takeIf { it.first == key }?.second ?: FileSource(file).also {
-                it.load(s.fps.toDouble())
+            val src = cachedSource?.takeIf { it.first == key }?.second ?: FileSource(file, File(cacheDir, "frames").apply { mkdirs() }).also {
+                runOnUiThread { loading.text = "Loading video..."; loading.visibility = View.VISIBLE }
+                var lastPct = -1
+                it.load(s.fps.toDouble()) { pct ->
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        runOnUiThread { loading.text = "Loading video...  $pct%\n(first time only)" }
+                    }
+                }
+                runOnUiThread { loading.visibility = View.GONE }
                 cachedSource = key to it
             }
             startWith(gen, s, src)
@@ -313,7 +495,7 @@ class MainActivity : Activity() {
         val stable = PopupRules.StableTop(s.minConfFor(s.model), s.popupClasses)
         ctrl = StreamController(conn::send, s.model, maxInFlight = 2,
             onLost = { conn.reset("no answer in time (slow network)") }) { snap ->
-            if (s.debug) debugView.show(snap)
+            if (showsFrames(s)) debugView.show(snap)
             val r = snap.result
             if (r != null && r.frameId != lastStreamResult) {
                 lastStreamResult = r.frameId
@@ -337,7 +519,7 @@ class MainActivity : Activity() {
         }
         ctrl = InspectController.forBitmaps(conn::send, s.votes, s.crops,
             onLost = { conn.reset("no answer in time (slow network)") }) { snap ->
-            if (s.debug) debugView.show(snap)
+            if (showsFrames(s)) debugView.show(snap)
             runOnUiThread { if (isCurrent(gen)) showInspection(snap, s) }
         }
         closer = conn::close
@@ -355,7 +537,14 @@ class MainActivity : Activity() {
         if (connWasLost) return                                     // "no connection" says it already
         val p = PopupRules.forVerdict(v, s.minConfFor("plant"))
         Log.i(TAG, "POPUP_VERDICT hold=${snap.verdictHold} kind=${v.kind} label=${v.label} sure=${p.sure}")
-        popup.show("hold${snap.verdictHold}", p.text, p.color)
+        // 8.9: test videos know the right answer of each leaf - show it under the verdict.
+        val expected = timeline?.expectedAt(snap.verdictPosMs)
+        val text = if (expected != null) {
+            val line = Timeline.verdictLine(expected, v.label)
+            Log.i(TAG, "POPUP_EXPECTED hold=${snap.verdictHold} pos_ms=${snap.verdictPosMs} said=${v.label} $line")
+            p.text + "\n" + line
+        } else p.text
+        popup.show("hold${snap.verdictHold}", text, p.color)
     }
 
     /** 8.2: send one bundled leaf image, model plant. */

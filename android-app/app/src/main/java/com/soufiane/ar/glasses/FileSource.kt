@@ -5,7 +5,11 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
 import android.util.Log
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
@@ -22,7 +26,7 @@ import kotlin.math.roundToLong
  * Put a video on the emulator with:
  *   adb push testdata/moving/couple-walking-among-cows-41565.mp4 /sdcard/Android/data/com.soufiane.ar.glasses/files/
  */
-class FileSource(private val file: File, private val maxWidth: Int = 640) : FrameSource {
+class FileSource(private val file: File, private val cacheDir: File? = null, private val maxWidth: Int = 640) : FrameSource {
 
     private var frames: List<ByteArray> = emptyList()
     private var durationMs = 0L
@@ -32,30 +36,83 @@ class FileSource(private val file: File, private val maxWidth: Int = 640) : Fram
     override val description: String
         get() = "video ${file.name} (${durationMs / 1000} s, ${frames.size} frames)"
 
-    /** Decode the video into frames at [fps]. Slow on the emulator: call it off the UI thread. */
-    fun load(fps: Double) {
+    /**
+     * The frames at [fps], reporting 0..100 to [onProgress]; call it off the UI thread.
+     * Decoding seeks once per frame (~150 ms each on the emulator: 20-33 s for a 30 s video), so the
+     * result is saved in [cacheDir]: from then on the same video loads in well under a second, even
+     * after an app restart. (Decoding all frames in sequence, Android 9+, was tried in 8.9: no faster -
+     * it decodes every frame of the video, 24-30/s, instead of the 8/s kept.)
+     */
+    fun load(fps: Double, onProgress: (Int) -> Unit = {}) {
+        val t0 = SystemClock.elapsedRealtime()
+        val cache = cacheDir?.let { File(it, "${file.name}-${file.length()}-${fps.toInt()}fps.frames") }
+        if (cache != null && cache.isFile) {
+            try {
+                readCache(cache)
+                Log.i(MainActivity.TAG, "FileSource loaded ${file.name}: ${frames.size} frames at $fps fps, ${durationMs} ms, " +
+                    "${frames.sumOf { it.size } / 1024} KB in memory, from cache in ${SystemClock.elapsedRealtime() - t0} ms")
+                return
+            } catch (e: Exception) {
+                Log.w(MainActivity.TAG, "FileSource: cache unreadable (${e.message}), decoding again")
+                cache.delete()
+            }
+        }
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(file.absolutePath)
             durationMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-            val out = ArrayList<ByteArray>()
-            val stepUs = (1_000_000.0 / fps).roundToLong()
-            var t = 0L
-            while (t < durationMs * 1000) {
-                val f = r.getFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST) ?: break
-                val small = shrink(f)
-                out.add(ByteArrayOutputStream(64 * 1024).also {
-                    small.compress(Bitmap.CompressFormat.JPEG, 92, it)
-                }.toByteArray())
-                small.recycle()
-                t += stepUs
-            }
-            frames = out
-            Log.i(MainActivity.TAG, "FileSource loaded ${file.name}: ${out.size} frames at $fps fps, ${durationMs} ms, " +
-                "${out.sumOf { it.size } / 1024} KB in memory")
+            frames = loadBySeeking(r, fps, onProgress)
         } finally {
             r.release()
         }
+        Log.i(MainActivity.TAG, "FileSource loaded ${file.name}: ${frames.size} frames at $fps fps, ${durationMs} ms, " +
+            "${frames.sumOf { it.size } / 1024} KB in memory, decoded in ${SystemClock.elapsedRealtime() - t0} ms")
+        if (cache != null) try {
+            writeCache(cache)
+        } catch (e: Exception) {
+            Log.w(MainActivity.TAG, "FileSource: could not save the cache: ${e.message}")
+            cache.delete()
+        }
+    }
+
+    /** Cache file: duration, frame count, then (length, JPEG bytes) per frame. */
+    private fun writeCache(f: File) {
+        val tmp = File(f.parentFile, f.name + ".part")
+        DataOutputStream(BufferedOutputStream(tmp.outputStream(), 256 * 1024)).use { out ->
+            out.writeLong(durationMs)
+            out.writeInt(frames.size)
+            for (b in frames) { out.writeInt(b.size); out.write(b) }
+        }
+        if (!tmp.renameTo(f)) error("rename failed")
+    }
+
+    private fun readCache(f: File) {
+        DataInputStream(BufferedInputStream(f.inputStream(), 256 * 1024)).use { inp ->
+            durationMs = inp.readLong()
+            val n = inp.readInt()
+            frames = List(n) { ByteArray(inp.readInt()).also { inp.readFully(it) } }
+        }
+    }
+
+    private fun loadBySeeking(r: MediaMetadataRetriever, fps: Double, onProgress: (Int) -> Unit): List<ByteArray> {
+        val out = ArrayList<ByteArray>()
+        val stepUs = (1_000_000.0 / fps).roundToLong()
+        var t = 0L
+        while (t < durationMs * 1000) {
+            val f = r.getFrameAtTime(t, MediaMetadataRetriever.OPTION_CLOSEST) ?: break
+            out.add(jpeg(f))
+            t += stepUs
+            onProgress((t / 10 / durationMs.coerceAtLeast(1)).toInt().coerceIn(0, 100))
+        }
+        return out
+    }
+
+    /** Shrink to [maxWidth] and keep as JPEG (q92); recycles [f]. */
+    private fun jpeg(f: Bitmap): ByteArray {
+        val small = shrink(f)
+        val bytes = ByteArrayOutputStream(64 * 1024).also { small.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+        small.recycle()
+        return bytes
     }
 
     private fun shrink(b: Bitmap): Bitmap {

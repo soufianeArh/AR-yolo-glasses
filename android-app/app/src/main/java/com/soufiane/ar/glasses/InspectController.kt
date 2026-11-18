@@ -70,7 +70,9 @@ class InspectController<F : Any>(
     }
 
     data class Snapshot<F>(val state: State, val change: Double, val frame: F?, val lastResult: FrameResult?,
-                           val verdict: Verdict?, val verdictHold: Int, val checking: String?, val debug: String)
+                           val verdict: Verdict?, val verdictHold: Int, val checking: String?, val debug: String,
+                           /** Where the verdict's leaf was in the video (8.9: the expected answer). */
+                           val verdictPosMs: Long = 0)
 
     private val lock = Any()
     private var state = State.MOVING
@@ -89,6 +91,7 @@ class InspectController<F : Any>(
     private var lastResult: FrameResult? = null
     private var verdict: Verdict? = null
     private var verdictHold = 0                                  // which hold the verdict belongs to
+    private var verdictPos = 0L
     private var holdThumb: IntArray? = null                      // the view of the current check
     private var checkedThumb: IntArray? = null                   // the view the last verdict is about
     private var checkedAt = 0L
@@ -108,7 +111,7 @@ class InspectController<F : Any>(
 
             when (state) {
                 State.MOVING -> if (steadyCount >= steadyFrames) {
-                    if (!reuseVerdict(t)) startInspection(frame, positionMs, t)
+                    if (!reuseVerdict(t, positionMs)) startInspection(frame, positionMs, t)
                 }
                 State.SHOWING -> if (!steady) state = State.MOVING          // next leaf: allowed again
                 State.CHECKING -> {
@@ -162,7 +165,7 @@ class InspectController<F : Any>(
     // ------------------------------------------------------------------ inspection
 
     /** Same view as the last verdict, recently: show it again, no new check. */
-    private fun reuseVerdict(t: IntArray): Boolean {
+    private fun reuseVerdict(t: IntArray, positionMs: Long): Boolean {
         val v = verdict ?: return false
         val prev = checkedThumb ?: return false
         if (v.kind == Kind.FAILED || clock() - checkedAt > reuseMs) return false
@@ -171,6 +174,7 @@ class InspectController<F : Any>(
         hold++
         reused++
         verdictHold = hold                                           // a new hold number: the popup shows again
+        verdictPos = positionMs
         state = State.SHOWING
         Log.i(MainActivity.TAG, "INSPECT_REUSE hold=$hold diff=${"%.1f".format(d)} kind=${v.kind} label=${v.label}")
         return true
@@ -204,6 +208,7 @@ class InspectController<F : Any>(
         val v = vote(votes, crops).let { if (it.kind == Kind.FAILED && note != null) it.copy(note = note) else it }
         verdict = v
         verdictHold = hold
+        verdictPos = holdStartPos
         checkedThumb = holdThumb
         checkedAt = clock()
         state = if (steadyCount > 0 && !movedDuringCheck) State.SHOWING else State.MOVING
@@ -219,7 +224,7 @@ class InspectController<F : Any>(
             Snapshot(state, change, lastFrame, lastResult, verdict, verdictHold,
                 if (state == State.CHECKING) "checking leaf... (${votes.size}/$voteFrames)" else null,
                 "INSPECT  state=$state  change=${"%.1f".format(change)} (steady < $steadyThreshold, " +
-                    "$steadyCount/$steadyFrames)  hold=$hold  votes=${votes.size}/$voteFrames  reused=$reused")
+                    "$steadyCount/$steadyFrames)  hold=$hold  votes=${votes.size}/$voteFrames  reused=$reused", verdictPos)
         }
         onUpdate(snap)
     }

@@ -34,7 +34,11 @@ class SettingsActivity : Activity() {
     private lateinit var minConf: EditText
     private lateinit var classes: EditText
     private lateinit var crops: EditText
+    private lateinit var apiPort: EditText
+    private lateinit var startScreen: Spinner
     private lateinit var debug: CheckBox
+    private lateinit var showCamera: CheckBox
+    private lateinit var showBoxes: CheckBox
     private lateinit var sources: List<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,7 +61,10 @@ class SettingsActivity : Activity() {
         })
         host = edit(form, "Server (Java scheduler) address", s.host, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         port = edit(form, "Server port", s.port.toString(), InputType.TYPE_CLASS_NUMBER)
-        source = spinner(form, "Camera source (videos: adb push into the app's files folder)", sources, s.source)
+        apiPort = edit(form, "Demo videos: control plane API port (same address)", s.apiPort.toString(), InputType.TYPE_CLASS_NUMBER)
+        startScreen = spinner(form, "App opens on: welcome = entry screen, inspect = straight into inspection (glasses)",
+            AppSettings.START_SCREENS, s.startScreen)
+        source = spinner(form, "Camera source (or pick a video on the Demo videos screen)", sources, s.source)
         mode = spinner(form, "Mode: inspect = plant look-and-hold, stream = every frame", AppSettings.MODES, s.mode)
         model = spinner(form, "Stream mode model (inspect always uses plant)", AppSettings.MODELS, s.model)
         fps = edit(form, "Frames per second (1-30)", s.fps.toString(), InputType.TYPE_CLASS_NUMBER)
@@ -69,6 +76,16 @@ class SettingsActivity : Activity() {
             s.popupClasses.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
         crops = edit(form, "Inspect: crops to inspect, comma separated (empty = any plant)",
             s.crops.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
+        showCamera = CheckBox(this).apply {
+            text = "Show the camera image behind the popup (turn OFF on see-through glasses)"
+            isChecked = s.showCamera
+        }
+        form.addView(showCamera)
+        showBoxes = CheckBox(this).apply {
+            text = "Show the detection boxes (and their labels) on the image"
+            isChecked = s.showBoxes
+        }
+        form.addView(showBoxes)
         debug = CheckBox(this).apply {
             text = "Debug view (camera frame, boxes, stats - off on the glasses)"
             isChecked = s.debug
@@ -104,9 +121,13 @@ class SettingsActivity : Activity() {
             fps = fps.text.toString().toIntOrNull() ?: old.fps,
             votes = votes.text.toString().toIntOrNull() ?: old.votes,
             debug = debug.isChecked,
+            showCamera = showCamera.isChecked,
+            showBoxes = showBoxes.isChecked,
             minConf = minConf.text.toString().trim().toFloatOrNull() ?: -1f,
             popupClasses = AppSettings.parseClasses(classes.text.toString()),
             crops = AppSettings.parseClasses(crops.text.toString()),
+            apiPort = apiPort.text.toString().toIntOrNull() ?: -1,
+            startScreen = AppSettings.START_SCREENS[startScreen.selectedItemPosition],
         ).validated()
         s.save(prefs)
         Log.i(MainActivity.TAG, "SETTINGS_SAVED from=screen changed=${AppSettings.changedKeys(old, s)} ${s.describe()}")

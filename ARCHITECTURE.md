@@ -89,9 +89,14 @@ As built (`android-app/`, package `com.soufiane.ar.glasses`; details and measure
   timeout); a frame with no answer in time resets the stream, so queued frames never arrive stale.
 - `AppSettings` + `SettingsActivity`: saved settings; launch extras are saved too (configure the
   glasses with one `adb` command); long-press or the menu key opens the settings screen.
+- `WelcomeActivity` (launcher) and `DemoListActivity` (8.9): entry screen with server status;
+  demo videos listed from the control plane (`GET /demos`, `ar_control/demos.py`) plus the ones on
+  the device, downloaded once on demand. Everything works with arrow keys + Enter (glasses).
+- The inspection screen shows videos and, unless "show camera" is off (see-through glasses), the
+  camera image; auto-hiding icons (Home, Pause, Settings); "expected: ... ✓/✗" for test videos.
 - Sources: `FileSource` (video files, frames kept as JPEG), `CameraSource` (Camera2; the PC
   webcam on the emulator). The pipeline runs only while the app is in front.
-- 27 JVM unit tests (`gradlew testDebugUnitTest`).
+- 31 JVM unit tests (`gradlew testDebugUnitTest`).
 
 The design it was built from:
 

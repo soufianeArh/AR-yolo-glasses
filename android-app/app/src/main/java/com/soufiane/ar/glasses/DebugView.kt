@@ -20,6 +20,10 @@ import com.soufiane.ar.proto.v1.FrameResult
  */
 class DebugView(context: Context) : View(context) {
 
+    /** Draw the detection boxes + labels on the image (setting "show boxes", on by default). */
+    @Volatile var boxes = true
+    /** Draw the debug text lines (setting "debug"). */
+    @Volatile var text = true
     private var frame: Bitmap? = null
     private var result: FrameResult? = null
     private var lines: List<String> = emptyList()
@@ -46,7 +50,8 @@ class DebugView(context: Context) : View(context) {
     /** Inspection mode (8.4). */
     fun show(s: InspectController.Snapshot<Bitmap>) {
         frame = s.frame
-        result = s.lastResult
+        // Boxes only while the view holds still: once it moves, they would sit on the wrong leaf.
+        result = if (s.state == InspectController.State.MOVING) null else s.lastResult
         lines = listOfNotNull(
             "DEBUG VIEW  " + s.debug,
             s.lastResult?.let { "last answer: frame #${it.frameId} ${it.status}, backend ${it.backendMs} ms" },
@@ -65,15 +70,18 @@ class DebugView(context: Context) : View(context) {
         val dst = RectF((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
         canvas.drawBitmap(f, Rect(0, 0, f.width, f.height), dst, null)
 
-        result?.detectionsList?.forEach { d ->
+        if (boxes) result?.detectionsList?.forEach { d ->
             val r = RectF(dst.left + d.x1 * w, dst.top + d.y1 * h, dst.left + d.x2 * w, dst.top + d.y2 * h)
             canvas.drawRect(r, boxPaint)
             val text = "${d.label} ${"%.2f".format(d.confidence)}"
             val tw = labelPaint.measureText(text)
-            canvas.drawRect(r.left, r.top - 34f, r.left + tw + 12f, r.top, labelBg)
-            canvas.drawText(text, r.left + 6f, r.top - 8f, labelPaint)
+            // Label above the box; inside it when the box touches the top (it would be cut off).
+            val top = if (r.top - 34f < 0f) r.top else r.top - 34f
+            canvas.drawRect(r.left, top, r.left + tw + 12f, top + 34f, labelBg)
+            canvas.drawText(text, r.left + 6f, top + 26f, labelPaint)
         }
 
+        if (!text) return
         var y = 40f
         for (l in lines) {
             canvas.drawRect(10f, y - 30f, 20f + statsPaint.measureText(l), y + 8f, labelBg)
