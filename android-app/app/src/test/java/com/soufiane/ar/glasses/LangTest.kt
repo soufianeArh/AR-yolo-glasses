@@ -7,12 +7,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** English / Chinese: popup texts, model labels, the expected line, settings. */
 class LangTest {
 
     @After
+    // lang is global so reset it for the other tests
     fun backToEnglish() {
-        Lang.current = "en"                           // other tests expect English
+        Lang.current = "en"
     }
 
     @Test

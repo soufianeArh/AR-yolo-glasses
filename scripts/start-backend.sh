@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# Start the backend in the background (Linux / WSL), in the setup recommended by Step 7:
-# PLANT ONLY by default - on the 4-core laptop, plant inspection and a COCO stream can't run at
-# the same time (bench/plant_split.json).
-#
-#   bash scripts/start-backend.sh                    # scheduler + 1 plant worker (3 threads)
-#   bash scripts/start-backend.sh --coco 1           # + 1 COCO worker (1 thread) for pipeline tests
-#   bash scripts/start-backend.sh --control          # + Redis publishing, consumer and API (port 8090)
-#   bash scripts/stop-backend.sh                     # stop everything started here
-#
-# Options: --coco N (COCO workers, default 0), --coco-threads T (default 1),
-#          --plant-threads T (default 3), --plant-model FILE (default models/plant.onnx),
-#          --control, --port P (scheduler, default 50051),
-#          --deadline-ms MS (COCO / default-model deadline; 300 normally - raise it only on an
-#          overloaded dev laptop, e.g. 1000 while the Android emulator shares the CPU),
-#          --plant-deadline-ms MS (plant deadline; 3500 normally - 8000 with the emulator running)
-# Logs: /tmp/ar-backend/*.log   (override with AR_LOG_DIR)
 set -euo pipefail
 
+# plant only by default because plant and coco together dont fit this cpu
 COCO=0; COCO_THREADS=1; PLANT_THREADS=3; PLANT_MODEL=models/plant.onnx; CONTROL=0; PORT=50051; DEADLINE=300; PLANT_DEADLINE=3500
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,11 +26,12 @@ mkdir -p "$LOG_DIR"
 PIDS="$LOG_DIR/pids"
 [ -f "$PIDS" ] && { echo "already running? $PIDS exists - run scripts/stop-backend.sh first"; exit 1; }
 
-wait_for() {   # wait_for <log file> <text> <seconds>
+wait_for() {
   for _ in $(seq 1 $(( $3 * 10 ))); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done
   echo "timed out waiting for '$2' in $1"; tail -5 "$1"; return 1
 }
 
+# keep the wsl session open after this or wsl stops everything
 REDIS_ARG="--redis none"
 [ "$CONTROL" = 1 ] && REDIS_ARG="--redis 127.0.0.1:6379"
 

@@ -1,31 +1,23 @@
 package com.soufiane.ar.glasses
 
-/**
- * The app's languages: English and Chinese (setting "language").
- *
- * A plain Kotlin table instead of Android string resources, on purpose: the popup / verdict logic
- * runs in JVM unit tests where Android resources do not exist, and model labels ("Corn leaf blight")
- * need a lookup table anyway. Logcat lines stay in English (tests read them).
- */
+// plain table instead of android resources so the popup logic stays testable on the jvm
 object Lang {
     val CODES = listOf("en", "zh")
     val NAMES = listOf("English", "中文")
 
     @Volatile var current = "en"
 
-    /** The UI text [key] in the current language, formatted with [args]. */
     fun t(key: String, vararg args: Any?): String {
         val table = if (current == "zh") ZH else EN
         val s = table[key] ?: EN[key] ?: key
         return if (args.isEmpty()) s else String.format(java.util.Locale.US, s, *args)
     }
 
-    /** A model label (plant disease, COCO object) or crop name in the current language. */
+    // unknown labels just stay in english
     fun label(raw: String): String =
         if (current == "zh") LABELS_ZH[raw] ?: LABELS_ZH[raw.lowercase()] ?: raw
         else raw.replace('_', ' ')
 
-    /** "corn, potato or tomato" / "玉米、马铃薯或番茄" */
     fun orList(items: List<String>): String {
         val l = items.map { label(it) }
         if (l.size < 2) return l.joinToString()
@@ -34,7 +26,6 @@ object Lang {
     }
 
     private val EN = mapOf(
-        // welcome
         "app_name" to "AR Plant Inspector",
         "tagline" to "Look at a corn, tomato or potato leaf and hold still:\nthe glasses tell you if it is diseased.",
         "server_checking" to "server %s: checking...",
@@ -45,7 +36,6 @@ object Lang {
         "btn_start_camera" to "Start inspection (camera)",
         "btn_demos" to "Demo videos",
         "btn_settings" to "Settings",
-        // demo list
         "demos_title" to "Demo videos",
         "demos_loading" to "loading the list...",
         "demos_pick" to "Pick a video: it plays as if it were the camera, and the glasses inspect it.",
@@ -60,7 +50,6 @@ object Lang {
         "tap_download" to "tap to download (%s MB)",
         "shows_expected" to "shows the expected answers",
         "other" to "other",
-        // inspection screen
         "home" to "⌂  Home",
         "videos" to "▶  Videos",
         "camera" to "◉  Camera",
@@ -81,7 +70,6 @@ object Lang {
         "video_not_found" to "video not found: %s",
         "camera_refused" to "camera permission refused - choose another source in settings",
         "backend_error" to "backend error: %s",
-        // popup
         "not_sure" to "Not sure - look closer\n(%s %s)",
         "frames_agree" to "%d/%d frames agree",
         "expected" to "expected: %s",
@@ -92,7 +80,6 @@ object Lang {
         "failed_note" to "%s - try again",
         "net_slow" to "Network too slow",
         "other_plant" to "Not a %s leaf",
-        // settings
         "settings_title" to "AR Plant Inspector - settings",
         "f_language" to "Language / 语言",
         "f_host" to "Server (Java scheduler) address",
@@ -190,11 +177,8 @@ object Lang {
         "btn_cancel" to "取消",
     )
 
-    /** Model labels and crop names in Chinese: the plant model's 31 classes + crops + COCO's 80. */
     private val LABELS_ZH = mapOf(
-        // crops (settings "crops")
         "corn" to "玉米", "tomato" to "番茄", "potato" to "马铃薯",
-        // plant model (PlantDoc classes)
         "leaves" to "叶片",
         "Apple Scab Leaf" to "苹果黑星病", "Apple leaf" to "苹果叶", "Apple rust leaf" to "苹果锈病",
         "Bell_pepper leaf" to "甜椒叶", "Bell_pepper leaf spot" to "甜椒叶斑病", "Blueberry leaf" to "蓝莓叶",
@@ -209,7 +193,6 @@ object Lang {
         "Tomato leaf yellow virus" to "番茄黄化曲叶病毒病", "Tomato mold leaf" to "番茄叶霉病",
         "Tomato two spotted spider mites leaf" to "番茄二斑叶螨", "grape leaf" to "葡萄叶",
         "grape leaf black rot" to "葡萄黑腐病",
-        // COCO (stream mode)
         "person" to "人", "bicycle" to "自行车", "car" to "汽车", "motorcycle" to "摩托车", "airplane" to "飞机",
         "bus" to "公交车", "train" to "火车", "truck" to "卡车", "boat" to "船", "traffic light" to "红绿灯",
         "fire hydrant" to "消防栓", "stop sign" to "停车标志", "parking meter" to "停车计时器", "bench" to "长椅",

@@ -1,23 +1,3 @@
-// worker-server: the C++ inference worker as a gRPC service (Step 3).
-//
-//   worker-server --model models/yolov8n.onnx --port 50061 --worker-id worker-1
-//                 [--threads 2] [--scheduler 127.0.0.1:50051] [--advertise 127.0.0.1:50061]
-//                 [--max-queue 2] [--conf 0.4] [--iou 0.5] [--name default]
-//
-// Serves   ar.v1.InferenceWorker/Detect   (Java scheduler -> this worker, one call per frame)
-// Calls    ar.v1.WorkerControl/Heartbeat  (this worker -> Java scheduler, every second)
-//
-// Concurrency model: ONE inference at a time per worker process.
-//   - Extra calls wait in a small queue (--max-queue). Beyond that the call is rejected
-//     with RESOURCE_EXHAUSTED, so the Java scheduler can send the frame to another worker.
-//   - A call whose deadline passed while it was waiting is skipped, not computed:
-//     nobody is waiting for that answer anymore, so the CPU goes to the next frame.
-//   - Scaling = more worker processes (Step 5), not more threads fighting inside one.
-//
-// Two kinds of failure, kept separate on purpose:
-//   - Frame-level outcome (bad image, unknown model) -> gRPC OK + FrameResult.status
-//   - Transport/capacity (queue full, deadline, crash) -> a gRPC error status
-
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -68,48 +48,37 @@ struct Options {
     std::string host = "0.0.0.0";
     int port = 50061;
     std::string worker_id = "worker-1";
-    std::string scheduler = "127.0.0.1:50051";  // empty = no heartbeats
-    std::string advertise;                      // address the scheduler should call; default 127.0.0.1:<port>
+    std::string scheduler = "127.0.0.1:50051";
+    std::string advertise;
     int max_queue = 2;
     ar::DetectorOptions model;
 };
 
-// ------------------------------------------------------------------ shared worker state
-
 struct WorkerState {
     Options opt;
     std::unique_ptr<ar::Detector> detector;
-    std::mutex detector_mu;               // one inference at a time
-    std::atomic<int> in_flight{0};        // running + waiting
-    std::atomic<double> avg_infer_ms{0};  // moving average, read by the heartbeat thread
+    std::mutex detector_mu;
+    std::atomic<int> in_flight{0};
+    std::atomic<double> avg_infer_ms{0};
     std::atomic<unsigned long long> served{0}, bad_frames{0}, rejected{0}, skipped_deadline{0}, aborted{0};
 
-    // The call whose inference is running right now, watched by the deadline watcher.
     std::mutex active_mu;
     bool active = false;
     std::chrono::system_clock::time_point active_deadline;
 };
 
-// Aborts the running inference once its call's deadline has passed.
-//
-// Without this, a frame nobody waits for anymore keeps the CPU busy until its inference ends,
-// and every frame queued behind it is delayed too (measured in Step 4). Polls every 5 ms:
-// cheap, and fine-grained enough next to ~100 ms inferences.
+// aborts the running inference once its deadline is gone
 void deadline_watcher(WorkerState& s) {
     while (!g_stop) {
         {
-            // Abort WHILE holding active_mu: the running call can only mark itself inactive (and
-            // the next call can only start) after we release it, so we can never hit the wrong run.
             std::lock_guard<std::mutex> lk(s.active_mu);
             if (s.active && std::chrono::system_clock::now() > s.active_deadline) {
-                s.detector->abort_current();  // repeated each poll until it lands: harmless
+                s.detector->abort_current();
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
-
-// ------------------------------------------------------------------ InferenceWorker service
 
 class InferenceService final : public pb::InferenceWorker::Service {
 public:
@@ -120,7 +89,6 @@ public:
         result->set_frame_id(frame->frame_id());
         result->set_worker_id(s_.opt.worker_id);
 
-        // Frame-level check: this worker only has one model loaded.
         for (const auto& m : frame->models()) {
             if (m != s_.detector->name()) {
                 ++s_.bad_frames;
@@ -131,30 +99,28 @@ public:
             }
         }
 
-        // Admission: 1 running + max_queue waiting. Beyond that, say so immediately.
         const int now_in_flight = ++s_.in_flight;
         struct Release {
             std::atomic<int>& n;
             ~Release() { --n; }
         } release{s_.in_flight};
-        if (now_in_flight > 1 + s_.opt.max_queue) {
+        if(now_in_flight > 1 + s_.opt.max_queue) {
             ++s_.rejected;
+            // answer right away so the scheduler can try another worker
             return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "worker queue full");
         }
 
         std::lock_guard<std::mutex> lk(s_.detector_mu);
 
-        // The deadline may have passed while this call waited for the detector.
         if (ctx->IsCancelled()) {
             ++s_.skipped_deadline;
             return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED, "deadline passed while queued");
         }
 
-        // Let the watcher abort this inference if the deadline passes while it runs.
         {
             std::lock_guard<std::mutex> alk(s_.active_mu);
             s_.active = true;
-            s_.active_deadline = ctx->deadline();  // "infinite" when the caller set none
+            s_.active_deadline = ctx->deadline();
         }
         struct Inactive {
             WorkerState& s;
@@ -204,13 +170,10 @@ private:
     WorkerState& s_;
 };
 
-// ------------------------------------------------------------------ heartbeats
-
 void heartbeat_loop(WorkerState& s) {
     const auto& o = s.opt;
-    // Reconnect backoff capped at 1 s: gRPC's default grows to 2 minutes, so after a long scheduler
-    // outage (70 s in the 8.7 test) the worker came back 35 s after the scheduler - the app then got
-    // "check failed" for every leaf meanwhile. Our own loop already paces the heartbeats (1/s).
+    // default backoff grows to two minutes so after a long scheduler outage
+    // the worker came back way too late
     grpc::ChannelArguments args;
     args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 500);
     args.SetInt(GRPC_ARG_MIN_RECONNECT_BACKOFF_MS, 500);
@@ -235,7 +198,6 @@ void heartbeat_loop(WorkerState& s) {
         pb::HeartbeatAck ack;
         const grpc::Status st = stub->Heartbeat(&ctx, hb, &ack);
 
-        // Log only when the state changes, not every second.
         if (st.ok()) {
             if (!connected) log(o.worker_id, "scheduler " + o.scheduler + " reachable, heartbeats flowing");
             connected = true;
@@ -265,7 +227,7 @@ int usage() {
     return 2;
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
     Options o;
@@ -299,8 +261,6 @@ int main(int argc, char** argv) {
     try {
         const auto t0 = Clock::now();
         state.detector = ar::load_detector(o.model);
-        // Warm-up: the first forward pass is much slower (allocations, kernel selection).
-        // Pay it now, not on the first real frame.
         state.detector->detect(cv::Mat(480, 640, CV_8UC3, cv::Scalar(114, 114, 114)));
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
         log(o.worker_id, "model '" + o.model.name + "' loaded + warmed up in " + std::to_string(ms) + " ms (" +
@@ -315,21 +275,20 @@ int main(int argc, char** argv) {
     grpc::ServerBuilder builder;
     int bound_port = 0;
     builder.AddListeningPort(o.host + ":" + std::to_string(o.port), grpc::InsecureServerCredentials(), &bound_port);
-    builder.SetMaxReceiveMessageSize(8 * 1024 * 1024);  // frames are ~50 KB; 8 MB leaves room for big test images
+    builder.SetMaxReceiveMessageSize(8 * 1024 * 1024);
     builder.RegisterService(&service);
     std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
     if (!server || bound_port == 0) {
         log(o.worker_id, "cannot listen on " + o.host + ":" + std::to_string(o.port) + " (port in use?)");
         return 1;
     }
-    // Tests wait for this exact line.
     log(o.worker_id, "READY listening on " + o.host + ":" + std::to_string(bound_port) + ", advertised as " +
                          o.advertise + ", max queue " + std::to_string(o.max_queue));
 
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 #ifdef SIGBREAK
-    std::signal(SIGBREAK, on_signal);  // Windows: Ctrl+Break, which a parent process can send to stop us cleanly
+    std::signal(SIGBREAK, on_signal);
 #endif
 
     std::thread watcher(deadline_watcher, std::ref(state));

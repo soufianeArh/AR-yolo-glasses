@@ -1,20 +1,3 @@
-"""
-End-to-end test of Step 4: fake Android app -> Java scheduler -> C++ worker -> back.
-
-Starts the real Java scheduler and the real C++ worker-server, then checks:
-
-  1. no worker yet            -> frames answered NO_WORKER (scheduler does not hang)
-  2. worker starts            -> it registers itself through its heartbeat
-  3. correctness              -> results through the scheduler == worker-cli, on every test image
-  4. video, 1 frame in flight -> throughput + latency (p50/p95/p99)
-  5. video, 2 frames in flight-> throughput + latency, and how the deadline behaves
-  6. worker killed            -> scheduler marks it unhealthy, answers NO_WORKER, keeps running
-  7. worker restarted         -> registers again, frames OK again
-  8. clean shutdown           -> final totals printed
-
-Usage (inside WSL, from the AR folder):
-  ~/ar-venv/bin/python tools/test_scheduler.py [--seconds 20]
-"""
 import argparse
 import glob
 import json
@@ -45,8 +28,6 @@ def check(name, ok, detail=""):
 
 
 class Proc:
-    """A child process whose stderr lines are collected, with a wait-for-line helper."""
-
     def __init__(self, cmd, name):
         self.name, self.lines, self.cond = name, [], threading.Condition()
         self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -82,6 +63,7 @@ class Proc:
         return self.p.returncode
 
 
+# real c++ workers and not mocks
 def start_worker():
     w = Proc([WORKER, "--model", MODEL, "--port", str(WORKER_PORT), "--worker-id", "worker-1",
               "--threads", "4", "--max-queue", "2", "--scheduler", f"127.0.0.1:{SCHED_PORT}"], "worker")
@@ -116,20 +98,17 @@ def main():
         sys.exit("scheduler did not start:\n" + "\n".join(sched.lines))
     print("scheduler started:", sched.lines[-1].split("] ")[-1], "\n")
 
-    # 1 ----------------------------------------------------------------------------------
     print("1. no worker registered yet")
     out = [json.loads(l) for l in client("images", images[0], images[1]).splitlines() if l.strip()]
     check("frames answered NO_WORKER", len(out) == 2 and all(o["status"] == "NO_WORKER" for o in out),
           out[0].get("error", "") if out else "no answer")
 
-    # 2 ----------------------------------------------------------------------------------
     print("\n2. worker starts and registers through its heartbeat")
     mark = len(sched.lines)
     worker = start_worker()
     check("scheduler logged the registration", sched.wait_for("worker registered: worker-1", 10, mark),
           next((l.split("] ")[-1] for l in sched.lines[mark:] if "registered" in l), ""))
 
-    # 3 ----------------------------------------------------------------------------------
     print("\n3. results through the scheduler == worker-cli, on every test image")
     expected = {}
     for line in subprocess.run([CLI, "--model", MODEL, *images], capture_output=True, text=True,
@@ -138,8 +117,6 @@ def main():
             j = json.loads(line)
             expected[j["file"]] = j["detections"]
     got = [json.loads(l) for l in client("images", *images).splitlines() if l.strip()]
-    # CORRECTNESS, not speed: a frame that missed the 300 ms deadline (hot CPU) is resent, up to
-    # 3 times, so the comparison is about results. How many needed a resend is reported.
     resent = 0
     for k, g in enumerate(got):
         tries = 0
@@ -166,7 +143,6 @@ def main():
     check(f"{len(got)} images, {n_dets} detections identical", same and len(got) == len(images),
           f"scheduler overhead (backend_ms - infer_ms): {min(overhead)}-{max(overhead)} ms" if overhead else "")
 
-    # 4 + 5 --------------------------------------------------------------------------------
     runs = {}
     for step, in_flight in ((4, 1), (5, 2)):
         print(f"\n{step}. video for {args.seconds:.0f} s, camera 8 fps, max {in_flight} frame(s) in flight")
@@ -181,20 +157,15 @@ def main():
               f" | backend p50/p95 = {s['backend_ms']['p50']}/{s['backend_ms']['p95']} ms | labels {s['top_labels']}")
         check("every sent frame answered", s["answered"] == s["sent"])
         if in_flight == 1:
-            # The baseline: one frame at a time fits the 300 ms deadline on one worker.
             check("no errors other than OK / DROPPED_DEADLINE", not bad, str(bad) if bad else "")
             check("almost all OK (>= 95%)", st.get("OK", 0) >= 0.95 * max(1, s["answered"]),
                   f"{st.get('OK', 0)}/{s['answered']}")
         else:
-            # A MEASUREMENT, not pass/fail: with 2 frames in flight on ONE worker, the second frame
-            # waits for the first, so backend time approaches the deadline and some frames drop.
-            # NO_WORKER here = the worker answered "queue full". Fixing this is Step 5 (N workers).
             allowed = {"OK", "DROPPED_DEADLINE", "NO_WORKER"}
             check("only expected statuses (OK / DROPPED_DEADLINE / queue full)", set(st) <= allowed, str(st))
             ok_pct = 100 * st.get("OK", 0) / max(1, s["answered"])
             print(f"     measured: {ok_pct:.0f}% OK with ONE worker and 2 frames in flight (deadline 300 ms)")
 
-    # 6 ----------------------------------------------------------------------------------
     print("\n6. worker killed (no clean exit, like a crash)")
     mark = len(sched.lines)
     worker.stop(signal.SIGKILL)
@@ -202,15 +173,12 @@ def main():
     check("frame right after the crash is answered (not hung)",
           len(out) == 1 and out[0]["status"] in ("WORKER_FAILED", "NO_WORKER"),
           f"{out[0]['status']}: {out[0].get('error', '')}" if out else "no answer")
-    # Since Step 5 the scheduler suspends a worker the moment a call finds it unreachable
-    # ("suspended"); before that, it only noticed missed heartbeats after 3 s ("unhealthy").
     check("scheduler stops using the worker (suspended or unhealthy)",
           sched.wait_for("suspended", 6, mark) or sched.wait_for("unhealthy", 6, mark))
     out = [json.loads(l) for l in client("images", images[0]).splitlines() if l.strip()]
     check("then answers NO_WORKER", len(out) == 1 and out[0]["status"] == "NO_WORKER")
     check("scheduler still running", sched.p.poll() is None)
 
-    # 7 ----------------------------------------------------------------------------------
     print("\n7. worker restarted")
     mark = len(sched.lines)
     worker = start_worker()
@@ -220,7 +188,6 @@ def main():
           (f"{len(out[0]['detections'])} cows" if out[0]["status"] == "OK"
            else f"{out[0]['status']}: {out[0].get('error', '')}") if out else "no answer")
 
-    # 8 ----------------------------------------------------------------------------------
     print("\n8. clean shutdown")
     worker.stop(signal.SIGINT)
     code = sched.stop(signal.SIGTERM)

@@ -11,10 +11,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-/** The look-and-hold state machine (8.4) and the vote, driven with fake frames and a fake clock. */
 class InspectControllerTest {
 
-    // Frames are their own 40×22 thumbnails: A and A2 differ by 2 (steady), A and B by 190 (moving).
+    // thumbnails are faked directly so no bitmaps are needed
     private val a = IntArray(880) { 10 }
     private val a2 = IntArray(880) { 12 }
     private val b = IntArray(880) { 200 }
@@ -52,10 +51,10 @@ class InspectControllerTest {
 
     @Test
     fun holdStartsACheckAfterFourSteadyFrames() {
-        frames(a, 1)                 // first frame: nothing to compare with
+        frames(a, 1)
         frames(a2, 3)
         assertTrue(sent.isEmpty())
-        frames(a, 1)                 // 4th steady frame
+        frames(a, 1)
         assertEquals(listOf(1L), sent)
         assertEquals(State.CHECKING, c.currentState)
     }
@@ -64,7 +63,7 @@ class InspectControllerTest {
     fun twoAgreeingVotesThenShowingAndNoRecheckOfTheSameLeaf() {
         frames(a, 5)
         c.onResult(result(1, "Corn rust leaf", 0.8f), 100)
-        frames(a, 1)                                         // still: 2nd vote goes out
+        frames(a, 1)
         assertEquals(listOf(1L, 2L), sent)
         c.onResult(result(2, "Corn rust leaf", 0.9f), 100)
         assertEquals(State.SHOWING, c.currentState)
@@ -72,23 +71,23 @@ class InspectControllerTest {
         assertEquals(Kind.DISEASE, v.kind)
         assertEquals("Corn rust leaf", v.label)
         assertEquals(2, v.agree)
-        frames(a, 20)                                        // keep looking at the same leaf
+        frames(a, 20)
         assertEquals(2, sent.size)
-        frames(b, 5)                                         // move on to the next leaf and hold
+        frames(b, 5)
         assertEquals(3, sent.size)
     }
 
-    /** Regression (8.5 potato run): the answer arrives, then the view moves before the 2nd vote. */
     @Test
+    // this one used to get stuck forever
     fun movingBetweenTwoVotesStillEndsTheCheck() {
         frames(a, 5)
         c.onResult(result(1, "Potato leaf late blight", 0.7f), 100)
-        frames(b, 1)                                         // the head turns: no 2nd vote
+        frames(b, 1)
         assertEquals(State.MOVING, c.currentState)
         val v = last!!.verdict!!
         assertEquals("Potato leaf late blight", v.label)
         assertEquals(1, v.frames)
-        frames(b, 4)                                         // the next leaf must still get checked
+        frames(b, 4)
         assertEquals(listOf(1L, 2L), sent)
     }
 
@@ -99,7 +98,7 @@ class InspectControllerTest {
         c.onFrame(a, now)
         assertEquals(Kind.FAILED, last!!.verdict!!.kind)
         assertEquals("Network too slow - try again", last!!.verdict!!.text)
-        assertEquals(1, lostCalls)                           // 8.7: the app resets the connection
+        assertEquals(1, lostCalls)
         assertEquals(State.SHOWING, c.currentState)
     }
 
@@ -119,7 +118,6 @@ class InspectControllerTest {
         assertEquals(State.CHECKING, c.currentState)
     }
 
-    /** 8.7 backpressure: a frame that cannot be sent ends the check at once, with the reason. */
     @Test
     fun unsendableFrameEndsTheCheckWithTheReason() {
         canSend = false
@@ -129,9 +127,9 @@ class InspectControllerTest {
         assertEquals("Network too slow - try again", v.text)
         assertEquals(State.SHOWING, c.currentState)
         canSend = true
-        frames(a, 10)                                        // same leaf: no retry storm
+        frames(a, 10)
         assertTrue(sent.isEmpty())
-        frames(b, 5)                                         // next leaf: checked normally
+        frames(b, 5)
         assertEquals(1, sent.size)
     }
 
@@ -142,20 +140,19 @@ class InspectControllerTest {
         assertEquals(Kind.FAILED, last!!.verdict!!.kind)
     }
 
-    /** Only the LAST checked leaf is remembered: A, then B, then back to A = a new check of A. */
     @Test
     fun onlyTheLastCheckedLeafIsRemembered() {
         frames(a, 5)
         c.onResult(result(1, "Corn rust leaf", 0.8f), 100)
         frames(a, 1)
         c.onResult(result(2, "Corn rust leaf", 0.9f), 100)
-        frames(b, 5)                                         // another leaf: checked
+        frames(b, 5)
         c.onResult(result(3, "Corn leaf blight", 0.8f), 100)
         frames(b, 1)
         c.onResult(result(4, "Corn leaf blight", 0.8f), 100)
         assertEquals(4, sent.size)
-        frames(a2, 5)                                        // back to the first leaf (diff 2 to a)
-        assertEquals(5, sent.size)                           // checked again: B was checked in between
+        frames(a2, 5)
+        assertEquals(5, sent.size)
     }
 
     @Test
@@ -165,16 +162,14 @@ class InspectControllerTest {
         frames(a, 1)
         c.onResult(result(2, "Corn rust leaf", 0.9f), 100)
         val firstHold = last!!.verdictHold
-        frames(b, 1); frames(a2, 5)                          // quick look away and back: reused
+        frames(b, 1); frames(a2, 5)
         assertEquals(2, sent.size)
-        assertTrue(last!!.verdictHold > firstHold)           // a new hold number -> the popup shows again
+        assertTrue(last!!.verdictHold > firstHold)
         assertEquals("Corn rust leaf", last!!.verdict!!.label)
-        now += 61_000                                        // a minute later: checked again
+        now += 61_000
         frames(b, 1); frames(a, 5)
         assertEquals(3, sent.size)
     }
-
-    // ------------------------------------------------------------------ the vote
 
     @Test
     fun voteKeepsOnlyOurCrops() {
@@ -183,7 +178,7 @@ class InspectControllerTest {
             .addDetections(Detection.newBuilder().setLabel("Blueberry leaf").setConfidence(0.82f))
             .addDetections(Detection.newBuilder().setLabel("Potato leaf late blight").setConfidence(0.41f)).build()
         val v = InspectController.vote(listOf(twoDets), crops)
-        assertEquals(Kind.DISEASE, v.kind)                   // the potato detection wins over the blueberry one
+        assertEquals(Kind.DISEASE, v.kind)
         assertEquals("Potato leaf late blight", v.label)
         val other = InspectController.vote(listOf(result(1, "Apple Scab Leaf", 0.95f)), crops)
         assertEquals(Kind.OTHER_PLANT, other.kind)

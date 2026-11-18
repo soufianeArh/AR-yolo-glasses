@@ -1,9 +1,3 @@
-"""initial schema: frame, detection, alert_rule, alert
-
-Revision ID: 0001
-Revises:
-Create Date: 2026-11-17
-"""
 import sqlalchemy as sa
 from alembic import op
 
@@ -13,6 +7,7 @@ branch_labels = None
 depends_on = None
 
 
+# frames detections alerts and rules in one go
 def upgrade():
     op.create_table(
         "frame",
@@ -82,7 +77,6 @@ def upgrade():
         sa.Column("acknowledged", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
     )
-    # Cold-start cooldown lookup: last alert for (rule, device).
     op.create_index("ix_alert_rule_device_raised", "alert", ["rule_id", "device_id", "raised_at"])
     op.create_index("ix_alert_raised_at", "alert", ["raised_at"])
 

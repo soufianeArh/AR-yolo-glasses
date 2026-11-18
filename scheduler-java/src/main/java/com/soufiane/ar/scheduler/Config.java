@@ -3,7 +3,6 @@ package com.soufiane.ar.scheduler;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Command-line options. */
 record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, int heartbeatTimeoutMs,
               int reportSeconds, int sessionMaxInFlight, int minRetryMs,
               String redis, String stream, int redisBuffer, long streamMaxLen) {
@@ -31,7 +30,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
               --redis-buffer           results kept in memory while Redis is unreachable
               --stream-max-len         Redis keeps about this many entries (older ones trimmed)""";
 
-    /** The deadline for frames asking for this model. */
+    // models without their own deadline use the global one
     int deadlineFor(String model) {
         return modelDeadlinesMs.getOrDefault(model, deadlineMs);
     }
@@ -51,11 +50,6 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
         return out;
     }
 
-    /**
-     * Built-in per-model deadlines, overridable with --model-deadline. "plant" (the plant-disease
-     * model, a "look and hold" inspection) takes ~1.6-2.5 s on the 4-core laptop; 2.5 s proved too
-     * tight under load (Step 7), so 3.5 s.
-     */
     static final Map<String, Integer> DEFAULT_MODEL_DEADLINES = Map.of("plant", 3500);
 
     static Config parse(String[] args) {

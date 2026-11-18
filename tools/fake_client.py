@@ -1,21 +1,3 @@
-"""
-Fake Android app: streams frames to the Java scheduler exactly like the real Android app will.
-
-  - one gRPC two-way stream (FrameStream.Stream) per session
-  - frames resized to ~640 px wide and JPEG-encoded on the client
-  - at most --max-in-flight frames waiting for an answer; when full, the newest camera frame
-    is DROPPED on the client (newest frame wins), never queued
-  - latency measured end to end on the client: from "captured" to result received
-
-Two modes:
-  video   play a video (looped) at --fps and report throughput / latency
-  images  send each image once and print one JSON line per result (used by the tests)
-
-Usage (inside WSL, from the AR folder):
-  ~/ar-venv/bin/python tools/fake_client.py video --video testdata/land/loop.mp4 --fps 8 --seconds 20
-  ~/ar-venv/bin/python tools/fake_client.py images testdata/land/*.png
-  ~/ar-venv/bin/python tools/fake_client.py --model plant images testdata/plant/*.png
-"""
 import argparse
 import glob
 import json
@@ -53,8 +35,8 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+# jpeg like the glasses would send it
 def encode(img, width, quality):
-    """What the Android app does before sending: shrink to ~640 wide, JPEG."""
     if img.shape[1] > width:
         h = round(img.shape[0] * width / img.shape[1])
         img = cv2.resize(img, (width, h), interpolation=cv2.INTER_AREA)
@@ -72,8 +54,6 @@ def percentile(sorted_vals, p):
 
 
 class Stream:
-    """One session: a request queue feeding the gRPC stream, and a reader for the results."""
-
     def __init__(self, target, token, max_in_flight, model="default"):
         self.model = model
         self.channel = grpc.insecure_channel(target, options=[("grpc.max_receive_message_length", 8 << 20),
@@ -81,8 +61,8 @@ class Stream:
         self.stub = pbg.FrameStreamStub(self.channel)
         self.requests = queue.Queue()
         self.slots = threading.Semaphore(max_in_flight)
-        self.sent_at = {}           # frame_id -> captured_at_ms
-        self.results = []           # (FrameResult, latency_ms)
+        self.sent_at = {}
+        self.results = []
         self.lock = threading.Lock()
         self.error = None
         metadata = [("authorization", token)] if token else None
@@ -109,7 +89,6 @@ class Stream:
             self.error = e
 
     def try_send(self, frame_id, jpeg, blocking=False):
-        """Send if a slot is free. Returns False when the client must drop this frame."""
         if not self.slots.acquire(blocking=blocking):
             return False
         captured = now_ms()
@@ -119,12 +98,10 @@ class Stream:
         return True
 
     def close(self, timeout=10):
-        self.requests.put(None)        # half-close: no more frames
+        self.requests.put(None)
         self.reader.join(timeout)
         self.channel.close()
 
-
-# ------------------------------------------------------------------ modes
 
 def run_images(args):
     paths = []
@@ -149,7 +126,6 @@ def run_images(args):
 
 
 def run_video(args):
-    # Pre-encode the video at the client frame rate, so encoding cost is not in the measurement.
     cap = cv2.VideoCapture(args.video)
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 25
     frames, t = [], 0.0
@@ -158,7 +134,6 @@ def run_video(args):
         ok, img = cap.read()
         if not ok:
             break
-        # keep the source frames that fall on our --fps clock
         while t <= idx / src_fps:
             frames.append(encode(img, args.width, args.quality))
             t += 1.0 / args.fps
@@ -167,7 +142,6 @@ def run_video(args):
         sys.exit(f"could not read {args.video}")
     avg_kb = sum(len(f) for f in frames) / len(frames) / 1024
 
-    # --burst: a buggy client with no in-flight limit, to test the scheduler's per-session cap.
     s = Stream(args.target, args.token, 1_000_000 if args.burst else args.max_in_flight, model=args.model)
     period = 1.0 / args.fps
     start = time.perf_counter()
@@ -206,7 +180,7 @@ def run_video(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="fake glasses client for the scheduler", formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--target", default="127.0.0.1:50051", help="Java scheduler address")
     ap.add_argument("--token", default="fake-device-1", help="device token (authorization header)")
     ap.add_argument("--model", default="default",

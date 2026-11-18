@@ -24,15 +24,6 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 
-/**
- * Step 8.6: the settings screen. Opened from the main screen with a long-press (glasses touchpad)
- * or the menu key; Save writes [AppSettings] and returns - the main screen restarts with them.
- * Built in code (no XML): a short list of fields.
- *
- * Save / Cancel sit in a fixed bar at the TOP: always visible, never under the keyboard, reachable
- * without scrolling (also with keys on the glasses). Nothing is applied before Save: Cancel or Back
- * leaves without changes. Keyboard "Done", or a tap outside a field, closes the keyboard.
- */
 class SettingsActivity : Activity() {
 
     private lateinit var host: EditText
@@ -102,7 +93,6 @@ class SettingsActivity : Activity() {
         }
         form.addView(debug)
 
-        // Fixed top bar: title, Cancel, Save.
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -159,7 +149,7 @@ class SettingsActivity : Activity() {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         setTextColor(color)
         background = GradientDrawable().apply { setColor(Color.rgb(45, 45, 45)); setStroke(2, color); cornerRadius = 20f }
-        setOnFocusChangeListener { v, has ->                          // visible focus for the glasses' keys
+        setOnFocusChangeListener { v, has ->
             (v.background as GradientDrawable).setColor(if (has) Color.rgb(90, 90, 90) else Color.rgb(45, 45, 45))
         }
         setOnClickListener { onClick() }
@@ -172,7 +162,7 @@ class SettingsActivity : Activity() {
         v.clearFocus()
     }
 
-    /** A tap outside the field being edited closes the keyboard. */
+    // a tap outside the field closes the keyboard
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (ev.action == MotionEvent.ACTION_DOWN) {
             val f = currentFocus
@@ -199,8 +189,7 @@ class SettingsActivity : Activity() {
             setText(value)
             inputType = type
             isSingleLine = true
-            // "Done" closes the keyboard. NO full-screen keyboard: in landscape Android otherwise shows a
-            // full-screen editor that hides the whole settings screen (Cancel / Save included).
+            // no fullscreen keyboard or it hides the whole screen in landscape
             imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
             setOnEditorActionListener { v, action, _ ->
                 if (action == EditorInfo.IME_ACTION_DONE) { hideKeyboard(v); true } else false

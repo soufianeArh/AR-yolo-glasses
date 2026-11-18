@@ -1,19 +1,3 @@
-"""
-Step 8.7: a bad network on demand - a TCP proxy that throttles and delays.
-
-The Android emulator's own network shaping (adb emu network speed/delay) proved unreliable for the
-emulator -> WSL route, and the WSL kernel has no `netem`. So: put this proxy between the app and the
-Java scheduler and point the app at it.
-
-  app (emulator) --> proxy :50052 --(rate limit + delay)--> scheduler :50051
-
-  ~/ar-venv/bin/python tools/slow_proxy.py --up-kbit 100 --delay-ms 300
-  adb shell am start -n com.soufiane.ar.glasses/.MainActivity --ei port 50052
-
-Both directions get the delay; --up-kbit limits app -> scheduler (frames), --down-kbit the answers.
-Settings can change while running: write "up_kbit delay_ms" into /tmp/slow_proxy.conf (checked every s),
-e.g. `echo "0 0" > /tmp/slow_proxy.conf` = no limit (good network again).
-"""
 import argparse
 import asyncio
 import os
@@ -23,8 +7,8 @@ CONF = "/tmp/slow_proxy.conf"
 state = {"up_kbit": 0.0, "down_kbit": 0.0, "delay_ms": 0.0}
 
 
+# delay and rate limit per chunk to fake a bad network
 async def pump(reader, writer, direction):
-    """Copies one direction in small chunks: each chunk waits for the delay and the rate limit."""
     sent_at = time.monotonic()
     try:
         while True:
@@ -34,8 +18,8 @@ async def pump(reader, writer, direction):
             if state["delay_ms"] > 0:
                 await asyncio.sleep(state["delay_ms"] / 1000)
             kbit = state["up_kbit"] if direction == "up" else state["down_kbit"]
-            if kbit > 0:                                    # time this chunk needs on the slow link
-                need = len(data) * 8 / (kbit * 1000)
+            if kbit > 0:
+                need = len(data)*8 / (kbit * 1000)
                 sent_at = max(sent_at, time.monotonic()) + need
                 await asyncio.sleep(max(0.0, sent_at - time.monotonic()))
             writer.write(data)
@@ -60,6 +44,7 @@ async def handle(client_r, client_w, target):
     print(f"proxy: connection from {peer} closed", flush=True)
 
 
+# change the speed live by writing to the conf file
 async def watch_conf():
     last = None
     while True:

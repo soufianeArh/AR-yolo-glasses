@@ -19,11 +19,6 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-/**
- * Step 8.9: the demo videos. The list comes from the server (GET /demos) plus the videos already
- * on the device; picking one downloads it once (with progress), then starts it: inspect mode for
- * the leaf videos, stream mode for the object videos. Works with the arrow keys + Enter too.
- */
 class DemoListActivity : Activity() {
 
     private lateinit var header: TextView
@@ -95,7 +90,7 @@ class DemoListActivity : Activity() {
         for (d in l.demos.filter { it.local }) thumbnail(d)
     }
 
-    /** First frame at 1 s + duration, for videos already on the device. */
+    // frame at 1 s because the very first frame is often black
     private fun thumbnail(d: DemoRepository.Demo) {
         if (thumbs.containsKey(d.file)) return
         val r = MediaMetadataRetriever()
@@ -114,6 +109,7 @@ class DemoListActivity : Activity() {
         runOnUiThread { (list.adapter as BaseAdapter).notifyDataSetChanged() }
     }
 
+    // busy flag so two taps dont start two downloads
     private fun pick(d: DemoRepository.Demo) {
         if (busy) return
         busy = true

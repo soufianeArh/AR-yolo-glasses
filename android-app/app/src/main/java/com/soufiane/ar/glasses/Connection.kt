@@ -6,28 +6,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
-/**
- * Step 8.7: a connection to the Java scheduler that repairs itself.
- *
- * Wraps one [BackendClient] (= one gRPC stream) at a time. When the stream breaks (scheduler
- * restarted, network gone, server not up yet), it waits and opens a new one: 1, 2, 4, 8, then
- * every 10 s, until it works - no app restart needed.
- *
- *   CONNECTING ──(channel READY)──► CONNECTED ──(stream error)──► DISCONNECTED ──(timer)──► CONNECTING
- *
- * - [send] returns false while not connected: the caller drops the frame (no queue of stale frames).
- * - Answers from an older, broken stream are ignored: nothing late or stale reaches the screen.
- *
- * Logcat (tag ARGlasses): CONN_STATE lines with the reason and the next retry, for tests.
- */
 class Connection(
     private val host: String,
     private val port: Int,
     private val token: String,
     private val onResult: (FrameResult, Long) -> Unit,
     private val backoffMs: List<Long> = listOf(1000, 2000, 4000, 8000, 10000),
-    /** An attempt not connected by then counts as failed (8.7: an attempt made while the scheduler
-     *  was down hung forever - no error, no success - even after it was back). */
     private val connectTimeoutMs: Long = 5000,
     private val onState: (State, String) -> Unit,
 ) {
@@ -46,7 +30,6 @@ class Connection(
 
     enum class SendResult { SENT, NOT_CONNECTED, NETWORK_BUSY }
 
-    /** Sends a frame if connected and the network keeps up; otherwise the caller drops it. */
     fun trySend(frameId: Long, image: ByteArray, models: List<String>): SendResult {
         val c = synchronized(lock) { if (state == State.CONNECTED) client else null } ?: return SendResult.NOT_CONNECTED
         if (!c.canSend()) {
@@ -60,15 +43,11 @@ class Connection(
     fun send(frameId: Long, image: ByteArray, models: List<String>): Boolean =
         trySend(frameId, image, models) == SendResult.SENT
 
-    /**
-     * Throws the current stream away and reconnects (8.7): used when a frame got no answer in time.
-     * On a slow link the unanswered frames sit in the socket buffer and would arrive later, stale and
-     * all together (seen: SESSION_LIMIT bursts); a new stream drops them, the scheduler cancels them.
-     */
+    // a fresh stream drops the frames still stuck in the socket buffer
     fun reset(why: String) {
         timer.execute {
             val c = synchronized(lock) { if (state == State.CONNECTED) client else null } ?: return@execute
-            attempt = 0                                       // a fresh retry: 1 s
+            attempt = 0
             lost(c, java.io.IOException(why))
         }
     }
@@ -83,8 +62,6 @@ class Connection(
         c?.close()
     }
 
-    // ------------------------------------------------------------------ inside the timer thread
-
     private fun connect() {
         val c: BackendClient
         synchronized(lock) {
@@ -92,12 +69,11 @@ class Connection(
             setState(State.CONNECTING, "attempt ${attempt + 1} to $host:$port")
             lateinit var self: BackendClient
             self = BackendClient(host, port, token,
-                { r, rtt -> if (isCurrent(self)) onResult(r, rtt) },          // old stream: ignored
+                { r, rtt -> if (isCurrent(self)) onResult(r, rtt) },
                 { e -> timer.execute { lost(self, e) } })
             c = self
             client = c
         }
-        // The stream opens lazily; poll the channel until it is READY (or the stream fails).
         val started = System.currentTimeMillis()
         readyCheck = timer.scheduleWithFixedDelay({
             var timedOut = false
@@ -109,6 +85,7 @@ class Connection(
                     attempt = 0
                     readyCheck?.cancel(false)
                     setState(State.CONNECTED, "after ${System.currentTimeMillis() - started} ms")
+                // an attempt can hang forever without any error so give up after a while
                 } else if (System.currentTimeMillis() - started > connectTimeoutMs) {
                     readyCheck?.cancel(false)
                     timedOut = true
@@ -118,10 +95,11 @@ class Connection(
         }, 100, 200, TimeUnit.MILLISECONDS)
     }
 
+    // only the current stream counts here because an old one is already replaced
     private fun lost(c: BackendClient, e: Throwable) {
         val delay: Long
         synchronized(lock) {
-            if (closed || client !== c) return                   // an old stream, already replaced
+            if (closed || client !== c) return
             client = null
             readyCheck?.cancel(false)
             delay = backoffMs[attempt.coerceAtMost(backoffMs.size - 1)]

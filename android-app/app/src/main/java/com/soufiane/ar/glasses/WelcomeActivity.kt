@@ -15,14 +15,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.concurrent.thread
 
-/**
- * Step 8.9: the entry screen. What the app does, whether the server is reachable, and three ways
- * in: inspect with the camera, demo videos, settings. Every button works with the arrow keys +
- * Enter too (the glasses' touchpad/buttons arrive as keys).
- *
- * Setting "start screen = inspect" (for the glasses): the app goes straight into inspection;
- * Back from there returns here.
- */
 class WelcomeActivity : Activity() {
 
     private lateinit var serverLine: TextView
@@ -35,6 +27,7 @@ class WelcomeActivity : Activity() {
         Lang.current = s.language
         builtLang = s.language
         val fromLauncher = intent?.action == Intent.ACTION_MAIN && savedInstanceState == null
+        // on the glasses the app can skip this screen
         if (fromLauncher && s.startScreen == "inspect") {
             Log.i(MainActivity.TAG, "WELCOME skipped (start screen = inspect)")
             startActivity(Intent(this, MainActivity::class.java))
@@ -71,13 +64,14 @@ class WelcomeActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val s = AppSettings.load(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE))
-        if (s.language != builtLang) {                     // language changed in Settings: redraw
+        if (s.language != builtLang) {
             recreate()
             return
         }
         serverLine.text = Lang.t("server_checking", "${s.host}:${s.port}")
         thread(name = "welcome-check") {
             val scheduler = try {
+                // a plain tcp connect is enough to know if the scheduler is up
                 Socket().use { it.connect(InetSocketAddress(s.host, s.port), 1500) }; true
             } catch (_: Exception) {
                 false
@@ -109,7 +103,6 @@ class WelcomeActivity : Activity() {
         background = GradientDrawable().apply {
             setColor(Color.rgb(20, 20, 20)); setStroke(3, color); cornerRadius = 24f
         }
-        // Focus (arrow keys) must be visible: brighter fill when focused.
         setOnFocusChangeListener { v, has ->
             (v.background as GradientDrawable).setColor(if (has) Color.rgb(60, 60, 60) else Color.rgb(20, 20, 20))
         }

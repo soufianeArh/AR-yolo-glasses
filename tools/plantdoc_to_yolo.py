@@ -1,23 +1,3 @@
-"""
-Step 7.6: convert the PlantDoc dataset into a YOLO training set.
-
-Same script on this PC and on Google Colab:
-  python plantdoc_to_yolo.py --src <PlantDoc clone> --out <output folder> [--max-side 1280]
-
-PlantDoc (https://github.com/pratikkayal/PlantDoc-Object-Detection-Dataset):
-  TRAIN/, TEST/                images (some file names contain ? : & ... - not valid on Windows)
-  train_labels.csv, test_labels.csv   filename,width,height,class,xmin,ymin,xmax,ymax
-
-Output (Ultralytics YOLO format):
-  images/train/train_00001.jpg ...   SAFE new names, JPEG, longest side <= --max-side
-  labels/train/train_00001.txt ...   "class cx cy w h", normalized 0..1
-  images/val, labels/val             from PlantDoc TEST (the standard benchmark split)
-  data.yaml                          classes in a fixed (sorted) order
-  mapping.csv                        new name -> original PlantDoc name (traceability)
-
-TRAIN only is used for training; TEST is the validation set, and also where our 45 evaluation
-leaves (testdata/plant/plantdoc) come from - so the comparison with the old model stays fair.
-"""
 import argparse
 import collections
 import csv
@@ -35,6 +15,7 @@ def read_labels(path):
     return rows
 
 
+# some plantdoc names are not valid on windows so files get renamed
 def convert(src, out, split_in, split_out, csv_name, classes, max_side, stats, mapping):
     labels = read_labels(os.path.join(src, csv_name))
     os.makedirs(os.path.join(out, "images", split_out), exist_ok=True)
@@ -54,7 +35,6 @@ def convert(src, out, split_in, split_out, csv_name, classes, max_side, stats, m
             continue
         lines = []
         for r in labels[fname]:
-            # boxes refer to the size written in the CSV (the annotation frame)
             w, h = float(r["width"]), float(r["height"])
             if w <= 0 or h <= 0:
                 w, h = float(im.width), float(im.height)

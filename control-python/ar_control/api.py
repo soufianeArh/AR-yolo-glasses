@@ -1,12 +1,3 @@
-"""
-REST API of the control plane: history, alerts, rules, health and stats, and the demo videos
-for the Android app (Step 8.9, ar_control/demos.py).
-
-  ~/ar-venv/bin/uvicorn ar_control.api:app --host 0.0.0.0 --port 8090
-
-A separate process from the consumer, on purpose: a slow API request can never delay the
-storage of results, and the consumer can be restarted without taking the API down.
-"""
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -37,8 +28,6 @@ def conn():
 def _row(r) -> dict:
     return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in dict(r).items()}
 
-
-# ------------------------------------------------------------------ rules
 
 class RuleIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -74,6 +63,7 @@ class RulePatch(BaseModel):
         return v.strip().lower() if v is not None else v
 
 
+# the consumer reloads rules every few seconds so no restart is needed
 @app.get("/rules")
 def list_rules(c=Depends(conn)):
     return [_row(r) for r in c.execute(select(alert_rule).order_by(alert_rule.c.id)).mappings()]
@@ -113,12 +103,9 @@ def update_rule(rule_id: int, body: RulePatch, c=Depends(conn)):
 
 @app.delete("/rules/{rule_id}", status_code=204)
 def delete_rule(rule_id: int, c=Depends(conn)):
-    # Past alerts stay: their rule_id becomes NULL, rule_name keeps the name.
     if c.execute(delete(alert_rule).where(alert_rule.c.id == rule_id)).rowcount == 0:
         raise HTTPException(404, f"no rule {rule_id}")
 
-
-# ------------------------------------------------------------------ alerts
 
 @app.get("/alerts")
 def list_alerts(device_id: str | None = None, severity: Severity | None = None, acknowledged: bool | None = None,
@@ -135,7 +122,6 @@ def list_alerts(device_id: str | None = None, severity: Severity | None = None, 
 
 @app.post("/alerts/{alert_id}/ack")
 def ack_alert(alert_id: int, c=Depends(conn)):
-    """Idempotent: acknowledging twice keeps the first acknowledgement time."""
     r = c.execute(update(alert).where(alert.c.id == alert_id, alert.c.acknowledged.is_(False))
                   .values(acknowledged=True, acknowledged_at=func.now()).returning(alert)).mappings().first()
     if r is None:
@@ -152,8 +138,6 @@ def alerts_summary(c=Depends(conn)):
     return {"by_severity": {s: {"total": t, "unacknowledged": u} for s, t, u in rows},
             "total": sum(t for _, t, _ in rows), "unacknowledged": sum(u for _, _, u in rows)}
 
-
-# ------------------------------------------------------------------ history
 
 @app.get("/detections")
 def list_detections(device_id: str | None = None, label: str | None = None,
@@ -175,7 +159,6 @@ def list_detections(device_id: str | None = None, label: str | None = None,
 
 @app.get("/stats")
 def stats(minutes: int = Query(5, ge=1, le=24 * 60), c=Depends(conn)):
-    """Frames per status, OK latency percentiles and per-worker share, over the last N minutes."""
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     by_status = dict(c.execute(select(frame.c.status, func.count()).where(frame.c.received_at >= since)
                                .group_by(frame.c.status)).all())
@@ -195,11 +178,9 @@ def stats(minutes: int = Query(5, ge=1, le=24 * 60), c=Depends(conn)):
             "ok_by_worker": by_worker, "top_labels": dict(top)}
 
 
-# ------------------------------------------------------------------ health
-
+# lag is how far the consumer is behind the stream
 @app.get("/health")
 def health():
-    """Database + Redis reachability and how far behind the consumer is."""
     out = {"database": "ok", "redis": "ok", "stream": settings.STREAM, "consumer_group": settings.GROUP}
     try:
         with engine.connect() as c:
@@ -213,8 +194,8 @@ def health():
         if g is None:
             out["consumer"] = "no consumer group yet"
         else:
-            out["pending"] = g["pending"]          # delivered, not yet acknowledged
-            out["lag"] = g.get("lag")              # in the stream, not yet delivered
+            out["pending"] = g["pending"]
+            out["lag"] = g.get("lag")
     except redis.ResponseError:
         out["consumer"] = "stream does not exist yet"
     except Exception as e:

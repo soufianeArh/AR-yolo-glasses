@@ -1,9 +1,3 @@
-// worker-cli: run the detector on image files and print one JSON line per image.
-//
-//   worker-cli --model models/yolov8n.onnx [--conf 0.4] [--iou 0.5] [--threads 2] img1.png img2.jpg ...
-//
-// Used by tools/compare.py to check results against Ultralytics.
-
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -17,6 +11,7 @@
 
 namespace {
 
+// just enough escaping for labels and error messages
 std::string json_escape(const std::string& s) {
     std::string out;
     for (const char ch : s) {
@@ -42,7 +37,7 @@ int usage() {
     return 2;
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
     ar::DetectorOptions cfg;

@@ -14,18 +14,6 @@ import java.io.File
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
 
-/**
- * Plays a video file as if it were the camera, in real time, looping.
- *
- * Frames are taken at the wall-clock position of the video (like a camera: if the app is slow,
- * frames are skipped, never delayed). The video is decoded ahead of time at the target fps and
- * kept as JPEG bytes (~50 KB each, quality 92), decoded again while playing (a few ms per frame).
- * Kept as full bitmaps instead, a 35 s video took ~260 MB of the app's memory (8.6) - too much
- * for the glasses; as JPEGs ~15 MB.
- *
- * Put a video on the emulator with:
- *   adb push testdata/moving/couple-walking-among-cows-41565.mp4 /sdcard/Android/data/com.soufiane.ar.glasses/files/
- */
 class FileSource(private val file: File, private val cacheDir: File? = null, private val maxWidth: Int = 640) : FrameSource {
 
     private var frames: List<ByteArray> = emptyList()
@@ -36,13 +24,6 @@ class FileSource(private val file: File, private val cacheDir: File? = null, pri
     override val description: String
         get() = "video ${file.name} (${durationMs / 1000} s, ${frames.size} frames)"
 
-    /**
-     * The frames at [fps], reporting 0..100 to [onProgress]; call it off the UI thread.
-     * Decoding seeks once per frame (~150 ms each on the emulator: 20-33 s for a 30 s video), so the
-     * result is saved in [cacheDir]: from then on the same video loads in well under a second, even
-     * after an app restart. (Decoding all frames in sequence, Android 9+, was tried in 8.9: no faster -
-     * it decodes every frame of the video, 24-30/s, instead of the 8/s kept.)
-     */
     fun load(fps: Double, onProgress: (Int) -> Unit = {}) {
         val t0 = SystemClock.elapsedRealtime()
         val cache = cacheDir?.let { File(it, "${file.name}-${file.length()}-${fps.toInt()}fps.frames") }
@@ -75,7 +56,7 @@ class FileSource(private val file: File, private val cacheDir: File? = null, pri
         }
     }
 
-    /** Cache file: duration, frame count, then (length, JPEG bytes) per frame. */
+    // decoding is slow on the emulator so the frames are kept on disk
     private fun writeCache(f: File) {
         val tmp = File(f.parentFile, f.name + ".part")
         DataOutputStream(BufferedOutputStream(tmp.outputStream(), 256 * 1024)).use { out ->
@@ -107,7 +88,6 @@ class FileSource(private val file: File, private val cacheDir: File? = null, pri
         return out
     }
 
-    /** Shrink to [maxWidth] and keep as JPEG (q92); recycles [f]. */
     private fun jpeg(f: Bitmap): ByteArray {
         val small = shrink(f)
         val bytes = ByteArrayOutputStream(64 * 1024).also { small.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
@@ -132,10 +112,11 @@ class FileSource(private val file: File, private val cacheDir: File? = null, pri
             var tick = 0L
             while (running) {
                 val now = SystemClock.elapsedRealtime()
-                val index = (((now - t0) / periodMs).toLong() % frames.size).toInt()   // looping, real time
+                // real time position like a camera so a slow frame is skipped not delayed
+                val index = (((now - t0) / periodMs).toLong() % frames.size).toInt()
                 val jpeg = frames[index]
                 val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-                if (bmp != null) onFrame(bmp, (index * periodMs).toLong())   // position in the video
+                if (bmp != null) onFrame(bmp, (index * periodMs).toLong())
                 tick++
                 val next = t0 + (tick * periodMs).toLong()
                 val wait = next - SystemClock.elapsedRealtime()

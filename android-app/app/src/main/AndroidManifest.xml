@@ -1,19 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- gRPC to the Java scheduler -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 8.7: source "camera" (emulator: the PC webcam; glasses: their camera) -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
-    <!-- usesCleartextTraffic: development backend without TLS (emulator -> 10.0.2.2:50051) -->
+    <!-- cleartext only because the dev backend has no tls yet -->
     <application
         android:label="@string/app_name"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
 
-        <!-- 8.9: the entry screen (launcher) -->
         <activity
             android:name=".WelcomeActivity"
             android:exported="true"
@@ -31,8 +28,6 @@
             android:screenOrientation="landscape"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
-        <!-- The inspection screen. Landscape, like the glasses display. Exported: tests start it
-             directly with adb (launch extras) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -40,7 +35,6 @@
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
-        <!-- 8.6: settings (long-press on the main screen, or the menu key) -->
         <activity
             android:name=".SettingsActivity"
             android:exported="false"

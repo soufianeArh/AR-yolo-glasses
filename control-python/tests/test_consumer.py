@@ -1,4 +1,3 @@
-"""The consumer: Redis Stream entries (same format the Java scheduler writes) -> Postgres."""
 import os
 import time
 
@@ -31,6 +30,7 @@ def consumer(name, stream_name):
                     rules_reload_seconds=0)
 
 
+# redis and postgres are real here and not mocked
 def test_frames_and_detections_are_stored(engine):
     entries = [(b"1-0", entry(1, labels=("cow", "cow", "bird"))),
                (b"2-0", entry(2, status=ResultStatus.DROPPED_DEADLINE)),
@@ -46,7 +46,7 @@ def test_frames_and_detections_are_stored(engine):
 def test_redelivered_entries_are_stored_once(engine):
     entries = [(b"1-0", entry(1)), (b"2-0", entry(2))]
     process_batch(engine, RuleEngine(0), entries)
-    again = process_batch(engine, RuleEngine(0), entries)       # same results delivered again
+    again = process_batch(engine, RuleEngine(0), entries)
     assert again["duplicates"] == 2 and again["frames"] == 0
     assert count(engine, frame) == 2 and count(engine, detection) == 2
 
@@ -58,7 +58,7 @@ def test_bad_entry_is_skipped_and_acknowledged(engine, stream):
     c = consumer("c1", name)
     assert c.run_once(block_ms=200) == 2
     assert c.totals["invalid"] == 1 and c.totals["frames"] == 1
-    assert r.xpending(name, "test")["pending"] == 0      # nothing stuck in the stream
+    assert r.xpending(name, "test")["pending"] == 0
 
 
 def test_crash_before_ack_is_recovered_on_restart(engine, stream):
@@ -67,12 +67,12 @@ def test_crash_before_ack_is_recovered_on_restart(engine, stream):
         r.xadd(name, entry(i))
     crashed = consumer("worker-a", name)
     crashed.ensure_group()
-    delivered = crashed.read(pending=False, block_ms=200)   # read, then "crash" before storing/acking
+    delivered = crashed.read(pending=False, block_ms=200)
     assert len(delivered) == 5 and count(engine, frame) == 0
     assert r.xpending(name, "test")["pending"] == 5
 
-    restarted = consumer("worker-a", name)                  # same consumer name after restart
-    assert restarted.run_once(block_ms=200) == 5            # takes its pending entries first
+    restarted = consumer("worker-a", name)
+    assert restarted.run_once(block_ms=200) == 5
     assert count(engine, frame) == 5
     assert r.xpending(name, "test")["pending"] == 0
 
@@ -83,10 +83,10 @@ def test_alerts_raised_through_the_pipeline(engine, stream):
                                             cooldown_seconds=10, severity="high", device_id=None, enabled=True))
     r, name = stream
     t0 = 1_800_000_000_000
-    for i in range(25):                                     # 25 frames, one every second
+    for i in range(25):
         r.xadd(name, entry(i, ms=t0 + i * 1000))
     c = consumer("c1", name)
     while c.run_once(block_ms=200):
         pass
     assert c.totals["frames"] == 25
-    assert count(engine, alert) == 3                        # t=0, 10, 20 s (cooldown 10 s)
+    assert count(engine, alert) == 3

@@ -1,7 +1,3 @@
-"""
-Shared test setup. Uses REAL Postgres (database ar_test) and REAL Redis (database 15),
-never the normal 'ar' database. Every test starts from empty tables.
-"""
 import os
 import uuid
 
@@ -19,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 
+# real postgres and redis but a seperate test database
 def alembic_config():
     cfg = Config(os.path.join(ROOT, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(ROOT, "migrations"))
@@ -27,7 +24,6 @@ def alembic_config():
 
 @pytest.fixture(scope="session", autouse=True)
 def schema():
-    """Migrations down to nothing and back up: tests the downgrade path too."""
     cfg = alembic_config()
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
@@ -46,7 +42,6 @@ def engine(schema):
 
 @pytest.fixture()
 def stream():
-    """A fresh Redis stream name per test, deleted afterwards."""
     import redis
     r = redis.Redis.from_url(os.environ["AR_REDIS_URL"])
     name = f"ar:test:{uuid.uuid4().hex[:8]}"

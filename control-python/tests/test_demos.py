@@ -1,4 +1,3 @@
-"""Step 8.9: the demo catalog API (list, video download, timeline), on a temporary catalog."""
 import json
 
 import pytest
@@ -44,9 +43,9 @@ def test_timeline(demos):
     assert demos.get("/demos/b/timeline").status_code == 404
 
 
+# path tricks must never reach other files
 def test_unknown_or_missing(demos):
     assert demos.get("/demos/nope/video").status_code == 404
-    assert demos.get("/demos/b/video").status_code == 404           # in the catalog, file not on server
-    # only catalog ids are served: no way to reach other files
+    assert demos.get("/demos/b/video").status_code == 404
     assert demos.get("/demos/..%2Fsecret.txt/video").status_code == 404
     assert demos.get("/demos/../secret.txt/video").status_code == 404

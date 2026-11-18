@@ -1,7 +1,7 @@
-"""Configuration from environment variables (same defaults as the Java scheduler)."""
 import os
 import socket
 
+# same defaults as the java scheduler
 DB_URL = os.getenv("AR_DB_URL", "postgresql+psycopg://ar:ar@127.0.0.1:5432/ar")
 REDIS_URL = os.getenv("AR_REDIS_URL", "redis://127.0.0.1:6379/0")
 STREAM = os.getenv("AR_STREAM", "ar:results")

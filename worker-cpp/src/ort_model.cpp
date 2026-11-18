@@ -14,16 +14,16 @@
 namespace ar {
 namespace {
 
-// One process-wide ONNX Runtime environment, shared by every model.
+// one env for the whole process like onnx runtime wants
 Ort::Env& ort_env() {
     static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "ar-worker");
     return env;
 }
 
-}  // namespace
+}
 
 std::vector<std::string> parse_names(const std::string& text) {
-    // Matches  0: 'person'  and  12: "Corn leaf blight"  (names may contain spaces)
+    // class names come from the onnx metadata as a python dict string
     static const std::regex entry(R"((\d+)\s*:\s*(['"])(.*?)\2)");
     std::vector<std::pair<int, std::string>> pairs;
     for (auto it = std::sregex_iterator(text.begin(), text.end(), entry); it != std::sregex_iterator(); ++it) {
@@ -42,9 +42,9 @@ struct OrtModel::Impl {
     std::string input_name;
     std::vector<std::string> output_names;
     Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    std::vector<Ort::Value> last_outputs;   // keeps the data of the last run alive
+    std::vector<Ort::Value> last_outputs;
 
-    std::mutex run_mu;                      // guards the two fields below
+    std::mutex run_mu;
     Ort::RunOptions* current_run = nullptr;
     bool abort_requested = false;
 };
@@ -55,11 +55,10 @@ OrtModel::OrtModel(const std::string& path, int threads) : impl_(std::make_uniqu
     if (!std::filesystem::exists(p)) throw std::runtime_error("model file not found: " + path);
 
     Ort::SessionOptions options;
-    options.SetIntraOpNumThreads(threads);  // threads for one forward pass
+    options.SetIntraOpNumThreads(threads);
     options.SetInterOpNumThreads(1);
     options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    // path::c_str() is wchar_t on Windows and char on Linux - exactly what ORTCHAR_T is.
     impl_->session = std::make_unique<Ort::Session>(ort_env(), p.c_str(), options);
 
     Ort::AllocatorWithDefaultOptions alloc;
@@ -98,7 +97,6 @@ std::vector<OrtModel::Output> OrtModel::run(const float* input, const std::vecto
     std::vector<const char*> out_names;
     for (const auto& n : impl_->output_names) out_names.push_back(n.c_str());
 
-    // A fresh RunOptions per run, published so abort() can terminate THIS run only.
     Ort::RunOptions run_options;
     {
         std::lock_guard<std::mutex> lk(impl_->run_mu);
@@ -132,12 +130,13 @@ std::vector<OrtModel::Output> OrtModel::run(const float* input, const std::vecto
     return outs;
 }
 
+// takes effect between two graph nodes so not instantly
 void OrtModel::abort() {
     std::lock_guard<std::mutex> lk(impl_->run_mu);
     if (impl_->current_run != nullptr) {
-        impl_->current_run->SetTerminate();  // ONNX Runtime checks this flag between graph nodes
+        impl_->current_run->SetTerminate();
         impl_->abort_requested = true;
     }
 }
 
-}  // namespace ar
+}

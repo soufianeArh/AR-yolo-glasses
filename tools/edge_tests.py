@@ -1,14 +1,3 @@
-"""
-Edge-case tests for the C++ worker (worker-cli).
-
-Generates unusual inputs in a temporary folder and checks that the worker:
-  - returns BAD_FRAME (never crashes) for bytes that are not an image
-  - still matches Ultralytics for valid but unusual images
-    (grayscale, transparency, 16-bit, tiny, very wide, very tall, huge)
-
-Usage (from the AR folder):
-  tools/.venv/Scripts/python tools/edge_tests.py
-"""
 import json
 import os
 import subprocess
@@ -24,6 +13,7 @@ from compare import CLI, MODEL, ROOT, BOX_TOL_PX, CONF_TOL, pair, ultralytics_re
 SOURCE = os.path.join(ROOT, "testdata", "land", "cow-attack-01.png")
 
 
+# broken or odd images must give a clear error and not a crash
 def run_cli(paths):
     proc = subprocess.run([CLI, "--model", MODEL, *paths], capture_output=True, text=True)
     lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
@@ -68,7 +58,6 @@ def main():
 
     ok_all = True
 
-    # 1. Bad bytes: must be BAD_FRAME, the process must not crash, and it must keep going.
     code, out, err = run_cli(paths_bad + [SOURCE])
     print("bad input (expect BAD_FRAME, no crash):")
     for p in paths_bad:
@@ -83,7 +72,6 @@ def main():
     if err.strip():
         print("  stderr:", err.strip()[:300])
 
-    # 2. Valid but unusual images: must match Ultralytics.
     code, out, err = run_cli(paths_valid)
     ref = ultralytics_results(paths_valid, conf=0.4, iou=0.5)
     print("\nunusual valid images (expect same result as Ultralytics):")

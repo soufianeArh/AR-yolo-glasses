@@ -1,25 +1,3 @@
-r"""
-End-to-end test of Step 6: the whole chain, plus the Python control plane off the hot path.
-
-  fake Android app -> Java scheduler -> C++ workers -> back      (fast path)
-                          \-> Redis Stream -> consumer -> Postgres -> API   (copy, async)
-
-Uses the TEST database (ar_test) and its OWN Redis (port 6390, no persistence) so Redis can
-be killed and restarted without touching the normal one.
-
-  1. everything starts, /health ok
-  2. a rule created through the API raises exactly ONE alert for 6 frames within its cooldown
-  3. stored detections == worker-cli, field by field
-  4. baseline video: every answered frame ends up in Postgres
-  5. REDIS DOWN mid-stream (killed, restarted empty): fast path unaffected, and the results
-     buffered by the scheduler still reach Postgres - nothing lost
-  6. CONSUMER CRASH mid-stream (SIGKILL, restarted): nothing lost, and the fast path does as well
-     as a CONTROL run with no crash right after (same CPU state - the CPU throttles as it heats)
-  7. /stats and /alerts/summary agree with what was sent
-
-Usage (inside WSL, from the AR folder):
-  ~/ar-venv/bin/python tools/test_control_plane.py
-"""
 import json
 import os
 import signal
@@ -53,8 +31,6 @@ def check(name, ok, detail=""):
 
 
 class Service(Proc):
-    """Proc with an environment and working directory (for the Python services)."""
-
     def __init__(self, cmd, name, cwd=None, env=None):
         self.name, self.lines, self.cond = name, [], threading.Condition()
         self.p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -93,8 +69,8 @@ def db_frames(engine):
         return c.execute(text("SELECT count(*) FROM frame")).scalar()
 
 
+# waits untill the consumer lag is zero
 def wait_caught_up(engine, expected, timeout=40):
-    """Until Postgres holds `expected` frames (the consumer caught up)."""
     deadline = time.time() + timeout
     n = db_frames(engine)
     while n < expected and time.time() < deadline:
@@ -119,13 +95,11 @@ def finish(p, seconds):
 def main():
     os.chdir(ROOT)
     engine = create_engine(DB_URL)
-    # fresh test database: migrations to head, empty tables
     subprocess.run([os.path.join(VENV_BIN, "alembic"), "upgrade", "head"], cwd=CONTROL, env=ENV, check=True,
                    capture_output=True)
     with engine.begin() as c:
         c.execute(text("TRUNCATE alert, alert_rule, detection, frame RESTART IDENTITY CASCADE"))
 
-    # 1 ----------------------------------------------------------------------------------
     print("1. start test Redis, scheduler (publishing to it), 3 workers x 2 threads, consumer, API")
     redis_p = start_redis()
     sched = Proc([SCHEDULER, "--port", str(SCHED_PORT), "--report-seconds", "5",
@@ -149,18 +123,16 @@ def main():
     h = http.get("/health").json()
     check("all services up, /health ok", h["ok"], {k: h.get(k) for k in ("database", "redis")})
 
-    # 2 + 3 ------------------------------------------------------------------------------
     print("\n2. rule 'cow x2, conf >= 0.5, cooldown 5 s' via the API, then the cow image 6 times")
     rule = http.post("/rules", json={"name": "cows", "label": "cow", "min_confidence": 0.5, "min_count": 2,
                                      "cooldown_seconds": 5, "severity": "high"})
     check("rule created", rule.status_code == 201, rule.json().get("label"))
-    time.sleep(1.5)                                           # consumer reloads rules every 1 s
+    time.sleep(1.5)
     out = subprocess.run([PY, CLIENT, "--target", f"127.0.0.1:{SCHED_PORT}", "images"] + [COW] * 6,
                          capture_output=True, text=True, timeout=120).stdout
     sent = [json.loads(l) for l in out.splitlines() if l.strip()]
     ok_frames = sum(1 for s in sent if s["status"] == "OK")
     n = wait_caught_up(engine, len(sent))
-    # Speed is not what this checks: a frame that missed its deadline is still stored (as DROPPED).
     check("all 6 frames answered and stored", len(sent) == 6 and n == 6,
           f"stored {n}; {ok_frames} OK, {6 - ok_frames} dropped at the deadline")
     alerts = http.get("/alerts").json()
@@ -182,7 +154,6 @@ def main():
     check("every OK frame's detections stored", len(stored) == ok_frames * len(exp),
           f"{len(stored)} rows = {ok_frames} OK frames x {len(exp)}")
 
-    # 4 ----------------------------------------------------------------------------------
     print("\n4. baseline: 10 s of video")
     before = db_frames(engine)
     base = video(10)
@@ -193,7 +164,6 @@ def main():
     print(f"     baseline: {100 * base_ok:.0f}% OK, client p50/p95 = "
           f"{base['client_latency_ms']['p50']}/{base['client_latency_ms']['p95']} ms")
 
-    # 5 ----------------------------------------------------------------------------------
     print("\n5. REDIS DOWN: killed 3 s into a 12 s video, restarted (empty) 4 s later")
     before = db_frames(engine)
     mark = len(sched.lines)
@@ -212,7 +182,6 @@ def main():
     check("NOTHING LOST: results buffered during the outage reached Postgres", n - before == run["answered"],
           f"answered {run['answered']}, stored {n - before}")
 
-    # 6 ----------------------------------------------------------------------------------
     print("\n6. CONSUMER CRASH: SIGKILL 2 s into a 10 s video, restarted 4 s later")
     before = db_frames(engine)
     p = video(10, background=True)
@@ -240,14 +209,12 @@ def main():
     check("stream fully processed (pending 0, lag 0)", h.get("pending") == 0 and h.get("lag") == 0,
           f"pending {h.get('pending')}, lag {h.get('lag')}")
 
-    # 7 ----------------------------------------------------------------------------------
     print("\n7. API views agree")
     st = http.get("/stats", params={"minutes": 60}).json()
     check("/stats counts every stored frame", st["frames"] == db_frames(engine), st["frames_by_status"])
     summ = http.get("/alerts/summary").json()
     print(f"     alerts: {summ['total']} total ({summ['by_severity']}), top labels {st['top_labels']}")
 
-    # shutdown -----------------------------------------------------------------------------
     stop(api.p, signal.SIGINT)
     stop(consumer.p, signal.SIGINT)
     for w in workers:

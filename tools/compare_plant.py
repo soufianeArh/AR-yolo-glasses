@@ -1,17 +1,3 @@
-"""
-Step 7.3 check: the C++ plant detector (worker-cli, Linux build in WSL) vs soufiane-easy's
-Python code path (transformers YolosImageProcessor + model + post_process_object_detection),
-on every leaf image in testdata/plant/expected.json.
-
-Two separate questions:
-  1. CORRECTNESS of the C++ port: same detections as Python (labels, scores +-0.01,
-     boxes +-0.01 of the image size). This is what must PASS.
-  2. ACCURACY of the model itself: is the top detection the expected disease? This is a
-     property of the trained model (not of our code) - reported, not pass/fail.
-
-Usage (Windows, from the AR folder):
-  tools/.venv/Scripts/python tools/compare_plant.py [--conf 0.4]
-"""
 import argparse
 import json
 import os
@@ -40,7 +26,7 @@ def python_results(files, conf):
         img = Image.open(os.path.join(ROOT, f)).convert("RGB")
         with torch.no_grad():
             o = model(**proc(images=img, return_tensors="pt"))
-        r = proc.post_process_object_detection(o, threshold=conf)[0]     # boxes stay relative 0..1
+        r = proc.post_process_object_detection(o, threshold=conf)[0]
         dets = [{"label": model.config.id2label[int(l)], "confidence": float(s),
                  **dict(zip(("x1", "y1", "x2", "y2"), [min(max(v, 0.0), 1.0) for v in b.tolist()]))}
                 for s, l, b in zip(r["scores"], r["labels"], r["boxes"])]
@@ -57,8 +43,8 @@ def cpp_results(files, conf):
     return {json.loads(l)["file"]: json.loads(l) for l in lines if l.strip()}
 
 
+# small float noise between python and c++ is fine
 def same(a, b):
-    """Pair detections by label and box; every one must match within tolerance."""
     if len(a) != len(b):
         return False, f"count {len(a)} vs {len(b)}"
     used, worst_s, worst_b = set(), 0.0, 0.0

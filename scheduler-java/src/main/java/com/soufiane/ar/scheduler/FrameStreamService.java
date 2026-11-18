@@ -26,23 +26,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Android app <-> Java scheduler. One long-lived two-way stream per Android app session.
- *
- * For each frame: reserve the least-loaded worker, call it with what is left of the frame's
- * deadline, send the result back on the same stream. If that worker's queue was full or it
- * could not be reached, try ONE other worker while enough deadline is left.
- *
- * Results can go back in a different order than frames arrived; the Android app matches them
- * by frame_id. Nothing here blocks: worker calls are async and their callbacks write the result.
- */
 final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
 
     static final String DEFAULT_MODEL = "default";
 
-    /** Captures the device token from the "authorization" header when a stream opens. */
     static final Context.Key<String> DEVICE_TOKEN = Context.key("device-token");
 
+    // the token only tells wich device it is and is no real auth yet
     static final class AuthInterceptor implements ServerInterceptor {
         private static final Metadata.Key<String> AUTH =
                 Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
@@ -59,9 +49,8 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
     private final WorkerRegistry registry;
     private final Metrics metrics;
     private final Config cfg;
-    private final ResultPublisher publisher;   // null = not publishing
+    private final ResultPublisher publisher;
     private final AtomicLong sessionSeq = new AtomicLong();
-    /** Makes session ids unique across scheduler restarts (they are stored in Postgres). */
     private final String instance = Long.toString(System.currentTimeMillis(), 36);
 
     FrameStreamService(WorkerRegistry registry, Metrics metrics, Config cfg, ResultPublisher publisher) {
@@ -71,7 +60,6 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         this.publisher = publisher;
     }
 
-    /** Short, stable device id from its token: the token itself is never logged or stored. */
     static String deviceId(String token) {
         if (token == null || token.isEmpty()) return "anonymous";
         try {
@@ -84,7 +72,6 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
 
     @Override
     public StreamObserver<Frame> stream(StreamObserver<FrameResult> out) {
-        // The token is only recorded, not checked. Checking it belongs with real devices (Step 7).
         String token = DEVICE_TOKEN.get();
         Session s = new Session("s-" + instance + "-" + sessionSeq.incrementAndGet(), deviceId(token), out);
         Log.info("session " + s.id + " opened (device " + s.device + ")");
@@ -95,15 +82,11 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         };
     }
 
-    /** gRPC failures worth one more try on ANOTHER worker. */
     private static boolean retryable(Status.Code code) {
-        // RESOURCE_EXHAUSTED: that worker's queue is full, another may be free.
-        // UNAVAILABLE: that worker can't be reached (crashed, restarting).
-        // NOT DEADLINE_EXCEEDED: the frame's time is used up, a retry would only be later.
         return code == Status.Code.RESOURCE_EXHAUSTED || code == Status.Code.UNAVAILABLE;
     }
 
-    /** One Android app connection. */
+    // one per open stream with its own in flight cap
     private final class Session {
         final String id;
         final String device;
@@ -127,8 +110,6 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             final Frame frame = incoming.toBuilder().setSessionId(id).build();
             final String model = frame.getModelsCount() == 0 ? DEFAULT_MODEL : frame.getModels(0);
 
-            // A well-behaved Android app keeps 1-2 frames in flight. Beyond the cap, answer at once
-            // instead of letting one session flood the workers.
             if (pending.get() >= cfg.sessionMaxInFlight()) {
                 send(failure(frame, ResultStatus.SESSION_LIMIT, "",
                         "session has " + cfg.sessionMaxInFlight() + " frames in flight already"), model, t0, false);
@@ -138,12 +119,9 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             attempt(frame, model, t0, null, null);
         }
 
-        /**
-         * @param failedWorker the worker that already failed this frame (first attempt: null)
-         * @param previous     the failure to report if no other worker can take it (first attempt: null)
-         */
         private void attempt(Frame frame, String model, long t0, WorkerRegistry.Worker failedWorker,
                              FrameResult previous) {
+            // what is left of the deadline after waiting for a free worker
             final long leftMs = cfg.deadlineFor(model) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             if (leftMs <= 0) {
                 send(failure(frame, ResultStatus.DROPPED_DEADLINE, "", "deadline used up before a worker took it"), model, t0, true);
@@ -160,7 +138,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             ListenableFuture<FrameResult> call;
             try {
                 call = w.stub.withDeadlineAfter(leftMs, TimeUnit.MILLISECONDS).detect(frame);
-            } catch (RuntimeException e) {          // channel already shut down, etc.
+            } catch (RuntimeException e) {
                 registry.release(w);
                 w.failed.incrementAndGet();
                 send(failure(frame, ResultStatus.WORKER_FAILED, w.id, String.valueOf(e.getMessage())), model, t0, true);
@@ -182,12 +160,12 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                     String why = st.getCode() + (st.getDescription() == null ? "" : ": " + st.getDescription());
                     ResultStatus rs = switch (st.getCode()) {
                         case DEADLINE_EXCEEDED -> ResultStatus.DROPPED_DEADLINE;
-                        case RESOURCE_EXHAUSTED -> ResultStatus.NO_WORKER;      // queue full
+                        case RESOURCE_EXHAUSTED -> ResultStatus.NO_WORKER;
                         default -> ResultStatus.WORKER_FAILED;
                     };
                     if (st.getCode() == Status.Code.UNAVAILABLE) {
                         w.failed.incrementAndGet();
-                        registry.suspend(w, why);   // don't send it more frames until it heartbeats again
+                        registry.suspend(w, why);
                     }
                     FrameResult fail = failure(frame, rs, w.id, why);
 
@@ -212,28 +190,23 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                     .build();
         }
 
-        /** @param counted true if this frame was counted in {@code pending}. */
         private void send(FrameResult r, String model, long t0, boolean counted) {
             final int backendMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             final FrameResult result = r.toBuilder().setBackendMs(backendMs).build();
             metrics.record(model, result.getStatus(), backendMs);
-            // A copy for the Python control plane. Non-blocking: never delays the answer below.
             if (publisher != null) {
                 publisher.publish(result, device, System.currentTimeMillis() - backendMs);
             }
             if (!gone) {
-                // StreamObserver is not thread-safe: worker callbacks arrive on several threads.
                 synchronized (out) {
                     try {
                         out.onNext(result);
                         answered.incrementAndGet();
-                    } catch (RuntimeException e) {   // the Android app disconnected meanwhile
+                    } catch (RuntimeException e) {
                         gone = true;
                     }
                 }
             }
-            // Only after the result is written: otherwise another thread could see pending == 0
-            // and close the stream before this result went out.
             if (counted) pending.decrementAndGet();
             maybeFinish();
         }
@@ -251,14 +224,12 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             }
         }
 
-        /** Close our side only after the client is done sending AND every result went out. */
         private void maybeFinish() {
             if (halfClosed.get() && pending.get() == 0 && finished.compareAndSet(false, true)) {
                 synchronized (out) {
                     try {
                         out.onCompleted();
                     } catch (RuntimeException ignored) {
-                        // already cancelled
                     }
                 }
                 Log.info("session " + id + " closed, frames " + received.get() + " received / "

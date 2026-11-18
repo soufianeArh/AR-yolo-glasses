@@ -1,19 +1,3 @@
-// Shared contract for the AR glasses detection system (Stream-Only, v1).
-//
-// Every component generates its code from this file:
-//   Android app (Kotlin) · Java scheduler · C++ worker · Python control plane
-//
-// Data chain:
-//   Android app --Frame--> Java scheduler --Frame--> C++ worker
-//   C++ worker --FrameResult--> Java scheduler --FrameResult--> Android app
-//   C++ worker --WorkerHeartbeat--> Java scheduler   (every second)
-//
-// Rules for changing this file without breaking anything:
-//   - Adding a new field is always safe (old code ignores it).
-//   - Renaming a field is safe (the field NUMBER goes over the wire, not the name).
-//   - NEVER reuse or change an existing field's number, and NEVER change its type.
-//   - A truly breaking change goes into a new package: ar.v2.
-
 syntax = "proto3";
 
 package ar.v1;
@@ -22,89 +6,69 @@ option java_multiple_files = true;
 option java_package = "com.soufiane.ar.proto.v1";
 option java_outer_classname = "DetectionProto";
 
-// ============================================================ data
-
-// One camera frame, sent by the Android app.
-// The Android app resizes to ~640px and encodes JPEG before sending.
-// The C++ worker letterboxes it to exactly 640x640 for the model.
 message Frame {
-  string session_id     = 1;  // one per Android app connection, set by the Java scheduler
-  uint64 frame_id       = 2;  // increases per session, set by the Android app
-  int64  captured_at_ms = 3;  // Android app clock, epoch ms - used for end-to-end latency
-  bytes  jpeg           = 4;  // the encoded image
-  repeated string models = 5; // model names to run, e.g. ["default"]; empty = "default"
+  string session_id     = 1;
+  uint64 frame_id       = 2;
+  int64  captured_at_ms = 3;
+  bytes  jpeg           = 4;
+  repeated string models = 5;
 }
 
-// One detected object.
-// Box coordinates are NORMALIZED to 0..1 relative to the image the Android app sent,
-// so the Android app (or the glasses display) just multiplies by its own screen size.
-// (x1, y1) = top-left corner, (x2, y2) = bottom-right corner.
+// boxes are normalized 0..1 so they dont depend on the image size
 message Detection {
-  string label      = 1;  // e.g. "person", "cow"
-  float  confidence = 2;  // 0..1
+  string label      = 1;
+  float  confidence = 2;
   float  x1 = 3;
   float  y1 = 4;
   float  x2 = 5;
   float  y2 = 6;
-  string model      = 7;  // which model produced it, e.g. "default"
+  string model      = 7;
 }
 
 enum ResultStatus {
-  RESULT_STATUS_UNSPECIFIED = 0;  // proto3 default, never sent on purpose
-  OK                = 1;  // inference ran; detections may still be empty
-  DROPPED_DEADLINE  = 2;  // frame was too old by the time a worker was free - dropped
-  WORKER_FAILED     = 3;  // the worker errored or died, and the one retry also failed
-  NO_WORKER         = 4;  // no healthy worker available, or every worker tried had a full queue
-  BAD_FRAME         = 5;  // the JPEG could not be decoded, or an unknown model was requested
-  SESSION_LIMIT     = 6;  // this Android app session already has too many frames in flight
+  RESULT_STATUS_UNSPECIFIED = 0;
+  OK                = 1;
+  DROPPED_DEADLINE  = 2;
+  WORKER_FAILED     = 3;
+  NO_WORKER         = 4;
+  BAD_FRAME         = 5;
+  SESSION_LIMIT     = 6;
 }
 
-// The answer for one frame.
+// results can come back in any order so the client matches them by frame_id
 message FrameResult {
   string session_id = 1;
-  uint64 frame_id   = 2;  // matches Frame.frame_id
+  uint64 frame_id   = 2;
   ResultStatus status = 3;
   repeated Detection detections = 4;
-  string worker_id  = 5;  // which C++ worker handled it (empty if none did)
-  uint32 infer_ms   = 6;  // time inside the C++ worker (decode + inference + post-processing)
-  uint32 backend_ms = 7;  // time inside the backend, from the Java scheduler receiving the frame to sending the result
-  string error      = 8;  // short reason when status is not OK
+  string worker_id  = 5;
+  uint32 infer_ms   = 6;
+  uint32 backend_ms = 7;
+  string error      = 8;
 }
 
-// Sent by each C++ worker to the Java scheduler every second.
-// The first heartbeat also registers the worker: the Java scheduler learns its address from it.
-// A worker that stops sending heartbeats is marked unhealthy and gets no new frames.
 message WorkerHeartbeat {
-  string worker_id    = 1;  // unique, e.g. "worker-1"
-  string address      = 2;  // where the Java scheduler reaches it, e.g. "127.0.0.1:50061"
-  repeated string models = 3; // models this worker has loaded
-  bool   busy         = 4;  // currently running an inference
-  uint32 queue_depth  = 5;  // frames waiting inside the worker
-  float  avg_infer_ms = 6;  // recent average inference time
-  uint32 threads      = 7;  // ONNX Runtime intra-op threads this worker uses
+  string worker_id    = 1;
+  string address      = 2;
+  repeated string models = 3;
+  bool   busy         = 4;
+  uint32 queue_depth  = 5;
+  float  avg_infer_ms = 6;
+  uint32 threads      = 7;
 }
 
 message HeartbeatAck {
-  bool accepted = 1;  // false = the Java scheduler rejected this worker (e.g. duplicate id)
+  bool accepted = 1;
 }
 
-// ============================================================ services
-
-// Android app <-> Java scheduler.
-// One long-lived two-way stream per Android app session.
-// The device token goes in the gRPC metadata header "authorization" when the stream opens.
-// Results can come back in a different order than frames were sent - match them by frame_id.
 service FrameStream {
   rpc Stream (stream Frame) returns (stream FrameResult);
 }
 
-// Java scheduler -> C++ worker. One call per frame.
-// The Java scheduler sets a gRPC deadline on every call (~300 ms).
 service InferenceWorker {
   rpc Detect (Frame) returns (FrameResult);
 }
 
-// C++ worker -> Java scheduler. One small call per second per worker.
 service WorkerControl {
   rpc Heartbeat (WorkerHeartbeat) returns (HeartbeatAck);
 }

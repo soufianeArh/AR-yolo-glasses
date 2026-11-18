@@ -1,14 +1,3 @@
-"""
-Step 8.9: demo videos for the Android app, served by the control plane.
-
-  GET /demos                    the catalog: id, title, crop, mode, size, timeline yes/no, available
-  GET /demos/{id}/video         the video file (the app downloads it once, then keeps it)
-  GET /demos/{id}/timeline      the expected answer per hold (look-and-hold videos only)
-
-The catalog (control-python/demos.json, in git) names files relative to AR_DEMO_ROOT (default: the
-repo root); the videos themselves are test media, not in git. Only ids from the catalog are served:
-the client never sends a path, so nothing outside the catalog can be read.
-"""
 import json
 import os
 
@@ -41,6 +30,7 @@ def _file(rel: str | None) -> str | None:
     return p if os.path.isfile(p) else None
 
 
+# only ids from the catalog are served so no path ever comes from the client
 def _find(demo_id: str) -> dict:
     for d in _load():
         if d["id"] == demo_id:
@@ -48,6 +38,7 @@ def _find(demo_id: str) -> dict:
     raise HTTPException(404, f"no demo '{demo_id}'")
 
 
+# missing videos are listed as unavailable instead of failing the whole list
 @router.get("/demos")
 def list_demos():
     out = []

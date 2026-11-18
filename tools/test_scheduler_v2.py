@@ -1,18 +1,3 @@
-"""
-End-to-end test of Step 5: the Java scheduler with N workers and several sessions at once.
-
-  1. 3 workers register themselves
-  2. 3 sessions AT THE SAME TIME, each gets exactly the worker-cli results (no mix-up between sessions)
-  3. load is spread over all workers (2 video sessions at once)
-  4. a misbehaving client (no in-flight limit) gets SESSION_LIMIT, a normal client next to it is unaffected
-  5. queue full on one worker -> the frame is retried on another worker
-  6. FAILOVER: a worker is killed mid-stream -> no WORKER_FAILED / NO_WORKER reaches the clients,
-     the scheduler suspends it at once, the others take over; restarted -> it gets frames again
-  7. workers aborted inferences whose deadline passed (counters at shutdown)
-
-Usage (inside WSL, from the AR folder):
-  ~/ar-venv/bin/python tools/test_scheduler_v2.py
-"""
 import glob
 import json
 import os
@@ -55,6 +40,7 @@ def client_cmd(port, *args):
     return [PY, CLIENT, "--target", f"127.0.0.1:{port}", *args]
 
 
+# several glasses at once to see the routing and the session cap
 def run_clients(cmds, timeout=300):
     procs = [subprocess.Popen(c, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for c in cmds]
     outs = []
@@ -84,17 +70,12 @@ def main():
     sched = start_scheduler(SCHED_PORT)
     print("scheduler started\n")
 
-    # 1 ----------------------------------------------------------------------------------
     print("1. three workers (2 threads each) register themselves")
     mark = len(sched.lines)
     workers = {i: start_worker(i, SCHED_PORT) for i in (1, 2, 3)}
     ok = all(sched.wait_for(f"worker registered: worker-{i}", 10, mark) for i in (1, 2, 3))
     check("worker-1, worker-2, worker-3 registered", ok)
 
-    # 2 ----------------------------------------------------------------------------------
-    # CORRECTNESS ONLY: no results mixed up between sessions. Uses its own scheduler with a
-    # generous deadline, so slow inferences can't turn this into a speed test (speed is measured
-    # separately by tools/bench_scheduler.py).
     print("\n2. three sessions at the same time, each sends all 12 images (deadline 5 s: correctness, not speed)")
     expected = worker_cli(images)
     sched_c = start_scheduler(SCHED2_PORT, deadline_ms=5000)
@@ -121,7 +102,6 @@ def main():
     check("each worker answered the frames of several sessions (shared, not one worker per session)",
           len(used) == 3, dict(used))
 
-    # 3 ----------------------------------------------------------------------------------
     print("\n3. two video sessions at once, 15 s, 8 fps, max 2 in flight each")
     outs = run_clients([client_cmd(SCHED_PORT, "video", "--seconds", "15", "--fps", "8",
                                    "--max-in-flight", "2", "--json") for _ in range(2)])
@@ -137,7 +117,6 @@ def main():
     check("no WORKER_FAILED / NO_WORKER", statuses.get("WORKER_FAILED", 0) + statuses.get("NO_WORKER", 0) == 0,
           dict(statuses))
 
-    # 4 ----------------------------------------------------------------------------------
     print("\n4. a misbehaving client (10 frames per tick, no limit) next to a normal client")
     outs = run_clients([
         client_cmd(SCHED_PORT, "video", "--seconds", "6", "--fps", "4", "--burst", "10", "--json"),
@@ -150,22 +129,14 @@ def main():
     good_ok = good_c["statuses"].get("OK", 0) / max(1, good_c["answered"])
     starved = {k: v for k, v in good_c["statuses"].items() if k in ("SESSION_LIMIT", "NO_WORKER")}
     check("the normal client is never refused (no SESSION_LIMIT / NO_WORKER)", not starved, good_c["statuses"])
-    # A/B: the same normal client ALONE right after (same CPU state - it throttles as it heats).
     alone = json.loads(run_clients([client_cmd(SCHED_PORT, "video", "--seconds", "6", "--fps", "4",
                                                "--max-in-flight", "1", "--json")])[0])
     alone_ok = alone["statuses"].get("OK", 0) / max(1, alone["answered"])
-    # MEASUREMENT, not pass/fail. The cap guarantees the normal client is never refused (checked
-    # above). It can NOT stop the CPU from being shared: with 3 workers busy on 4 cores every
-    # inference slows down, so the normal client may miss more deadlines. That is the capacity
-    # limit measured by bench_scheduler.py (two sessions don't fit 300 ms on this laptop).
     print(f"     measured: normal client next to it {100 * good_ok:.0f}% OK "
           f"(p95 {good_c['client_latency_ms']['p95']} ms) vs alone {100 * alone_ok:.0f}% OK "
-          f"(p95 {alone['client_latency_ms']['p95']} ms) - shared CPU, see the Step 5 benchmark")
+          f"(p95 {alone['client_latency_ms']['p95']} ms) - shared CPU, see the scheduler benchmark")
 
-    # 5 ----------------------------------------------------------------------------------
     print("\n5. queue full -> retry on another worker (separate scheduler, 2 workers that accept 1 frame each)")
-    # cap 4: the client must be able to have more frames in flight than the 2 workers accept,
-    # otherwise no queue ever fills and there is nothing to retry.
     sched2 = start_scheduler(SCHED2_PORT, session_cap=4)
     mark2 = len(sched2.lines)
     q = [start_worker(i, SCHED2_PORT, threads=1, max_queue=0, port=BASE_PORT + 10 + i) for i in (8, 9)]
@@ -182,7 +153,6 @@ def main():
     check("frames hitting a full worker were retried on the other one", retries > 0,
           f"retries={retries}, client statuses {s['statuses']}")
 
-    # 6 ----------------------------------------------------------------------------------
     print("\n6. FAILOVER: kill worker-2 in the middle of 2 video sessions (20 s)")
     mark = len(sched.lines)
     procs = [subprocess.Popen(client_cmd(SCHED_PORT, "video", "--seconds", "20", "--fps", "8",
@@ -201,9 +171,6 @@ def main():
         answered += s["answered"]
         sent += s["sent"]
     check("every frame answered", answered == sent, f"{answered}/{sent}")
-    # A frame that was mid-inference on the killed worker with < 50 ms of its deadline left can't
-    # be retried in time: it is answered WORKER_FAILED, by design. At most the frames in flight on
-    # that worker at that moment (<= 2). Every other frame must be saved by the retry.
     check("at most the killed worker's in-flight frames lost (WORKER_FAILED <= 2), no NO_WORKER",
           statuses.get("WORKER_FAILED", 0) <= 2 and statuses.get("NO_WORKER", 0) == 0, dict(statuses))
     log6 = sched.lines[mark:]
@@ -222,7 +189,6 @@ def main():
     s = json.loads(out)
     check("worker-2 gets frames again", s["ok_by_worker"].get("worker-2", 0) > 0, s["ok_by_worker"])
 
-    # 7 + shutdown ------------------------------------------------------------------------
     print("\n7. shutdown")
     aborted = 0
     for i, w in workers.items():

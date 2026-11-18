@@ -9,30 +9,14 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Streams frames from a FrameSource to the backend, like the real app on the glasses:
- *   - each frame is JPEG-encoded (quality 80, already <= 640 px wide)
- *   - at most [maxInFlight] frames wait for an answer; while full, new frames are DROPPED
- *     (newest frame wins - never a queue of stale frames)
- *   - results come back in any order and are matched by frame_id
- *
- *   - a frame with no answer after [lostAfterMs] is counted as LOST and frees its slot: otherwise
- *     a backend that silently disappears would leave the app stuck with no free slot forever
- *     (seen in 8.3: 2 frames never answered -> every later frame dropped)
- *
- * Writes "STATS ..." to logcat every 5 s (tag ARGlasses) so tests can compare with the scheduler.
- */
 class StreamController(
-    /** Sends one frame; false = not connected or network busy (8.7), the frame is dropped. */
     private val send: (Long, ByteArray, List<String>) -> Boolean,
     private val model: String,
     private val maxInFlight: Int = 2,
     private val lostAfterMs: Long = 5000,
-    /** Frames got no answer in time (8.7: the app then resets the connection - stale frames dropped). */
     private val onLost: () -> Unit = {},
     private val onUpdate: (Snapshot) -> Unit,
 ) {
-    /** What the debug view shows. */
     data class Snapshot(
         val frame: Bitmap?, val frameId: Long,
         val result: FrameResult?, val resultAgeMs: Long,
@@ -44,11 +28,11 @@ class StreamController(
     private val sent = AtomicLong(0)
     private val droppedOnClient = AtomicLong(0)
     private val lost = AtomicLong(0)
-    private val noServer = AtomicLong(0)            // not sent: no server or network busy
-    private val pending = HashMap<Long, Long>()         // frame_id -> sent at (elapsedRealtime)
+    private val noServer = AtomicLong(0)
+    private val pending = HashMap<Long, Long>()
     private val statusCounts = HashMap<ResultStatus, Long>()
-    private val latencies = ArrayDeque<Long>()          // last 200 OK round trips (ms)
-    private val okTimes = ArrayDeque<Long>()            // when OK results arrived, for OK fps
+    private val latencies = ArrayDeque<Long>()
+    private val okTimes = ArrayDeque<Long>()
     private var lastFrame: Bitmap? = null
     private var lastFrameId = 0L
     private var lastResult: FrameResult? = null
@@ -56,12 +40,11 @@ class StreamController(
     private var lastLog = SystemClock.elapsedRealtime()
     private val lock = Any()
 
-    /** Called by the FrameSource for every camera frame. */
     fun onFrame(bitmap: Bitmap, @Suppress("UNUSED_PARAMETER") positionMs: Long = 0) {
         val now = SystemClock.elapsedRealtime()
         val anyLost = synchronized(lock) {
             lastFrame = bitmap
-            // Frames that never got an answer: give their slot back.
+            // frames that never got an answer give their slot back after a while
             val expired = pending.filterValues { now - it > lostAfterMs }.keys.toList()
             for (id in expired) {
                 pending.remove(id)
@@ -72,7 +55,8 @@ class StreamController(
             expired.isNotEmpty()
         }
         if (anyLost) onLost()
-        if (inFlight.get() >= maxInFlight) {          // backend busy: drop, don't queue
+        // backend is busy so drop the frame instead of queing it
+        if (inFlight.get() >= maxInFlight) {
             droppedOnClient.incrementAndGet()
             publish()
             return
@@ -88,7 +72,7 @@ class StreamController(
         }
         if (send(id, jpeg, listOf(model))) {
             sent.incrementAndGet()
-        } else {                                      // not connected / network busy: drop, never queue
+        } else {
             synchronized(lock) { pending.remove(id) }
             inFlight.decrementAndGet()
             noServer.incrementAndGet()
@@ -96,11 +80,9 @@ class StreamController(
         publish()
     }
 
-    /** Called by the BackendClient for every answer. */
     fun onResult(r: FrameResult, roundTripMs: Long) {
         val now = SystemClock.elapsedRealtime()
         synchronized(lock) {
-            // An answer for a frame already counted as lost must not free a second slot.
             if (pending.remove(r.frameId) == null) return
             inFlight.decrementAndGet()
             statusCounts[r.status] = (statusCounts[r.status] ?: 0) + 1
@@ -119,7 +101,6 @@ class StreamController(
         publish()
     }
 
-    /** The stream broke (backend gone): nothing in flight will ever come back. */
     fun onStreamLost() {
         synchronized(lock) {
             lost.addAndGet(pending.size.toLong())

@@ -13,19 +13,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Sends a copy of every frame result to a Redis Stream for the Python control plane.
- *
- * NEVER slows the fast path: {@link #publish} only puts the result in a bounded in-memory buffer
- * and returns. One background thread writes the buffer to Redis in batches. If Redis is down,
- * results wait in the buffer and go out when it is back; if the buffer fills up, the OLDEST
- * results are dropped (counted and logged) - the popup on the glasses never waits for Redis.
- *
- * Stream entry fields:
- *   pb           the FrameResult, protobuf bytes (the shared contract)
- *   device       short id of the device (hash of its token, never the token itself)
- *   received_ms  when the scheduler received the frame (epoch ms)
- */
 final class ResultPublisher implements AutoCloseable {
 
     private record Item(byte[] pb, String device, long receivedMs) {}
@@ -45,7 +32,6 @@ final class ResultPublisher implements AutoCloseable {
     final AtomicLong published = new AtomicLong();
     final AtomicLong droppedBufferFull = new AtomicLong();
 
-    /** @param address "host:port" */
     ResultPublisher(String address, String stream, int bufferSize, long streamMaxLen) {
         int colon = address.lastIndexOf(':');
         this.host = address.substring(0, colon);
@@ -58,10 +44,10 @@ final class ResultPublisher implements AutoCloseable {
         this.thread.start();
     }
 
-    /** Non-blocking. Called on the fast path for every result. */
     void publish(FrameResult result, String device, long receivedMs) {
         Item item = new Item(result.toByteArray(), device, receivedMs);
-        while (!buffer.offer(item)) {           // full: drop the oldest, keep the newest
+        // redis is down or slow so drop the oldest result and never block the glasses
+        while (!buffer.offer(item)) {
             if (buffer.poll() != null) droppedBufferFull.incrementAndGet();
         }
     }
@@ -87,6 +73,7 @@ final class ResultPublisher implements AutoCloseable {
                 Pipeline p = jedis.pipelined();
                 XAddParams params = XAddParams.xAddParams().maxLen(maxLen).approximateTrimming();
                 for (Item it : batch) {
+                    // approximate maxlen trims the stream so redis never grows forever
                     p.xadd(stream, params, Map.of(
                             F_PB, it.pb(),
                             F_DEVICE, it.device().getBytes(StandardCharsets.UTF_8),
@@ -106,7 +93,6 @@ final class ResultPublisher implements AutoCloseable {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                // Redis down or the connection broke. Keep the batch, reconnect after a pause.
                 if (connected || !warned) {
                     Log.info("redis " + host + ":" + port + " unreachable (" + e.getClass().getSimpleName()
                             + "), results kept in memory (" + (buffer.size() + batch.size()) + " now), retrying");
@@ -114,10 +100,10 @@ final class ResultPublisher implements AutoCloseable {
                 }
                 connected = false;
                 if (jedis != null) {
-                    try { jedis.close(); } catch (RuntimeException ignored) { /* already broken */ }
+                    try { jedis.close(); } catch (RuntimeException ignored) {  }
                     jedis = null;
                 }
-                if (!running) return;   // shutting down with Redis unreachable: give up
+                if (!running) return;
                 try {
                     Thread.sleep(backoffMs);
                 } catch (InterruptedException ie) {
@@ -134,7 +120,7 @@ final class ResultPublisher implements AutoCloseable {
     public void close() {
         running = false;
         try {
-            thread.join(3000);   // let the last results out if Redis is reachable
+            thread.join(3000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

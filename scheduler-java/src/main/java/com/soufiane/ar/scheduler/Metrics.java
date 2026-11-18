@@ -13,22 +13,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * Throughput and latency, logged every few seconds.
- * Latency here = backend time: from the scheduler receiving a frame to sending its result.
- * Latency is kept PER MODEL: a plant inspection (~2 s) and a COCO frame (~150 ms) mixed into one
- * percentile would mean nothing.
- */
 final class Metrics {
     private final Map<ResultStatus, LongAdder> totals = new EnumMap<>(ResultStatus.class);
-    // model -> backend ms of OK results in the current window
+    // only the last 5 s for the periodic log line
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<Integer>> window = new ConcurrentHashMap<>();
     private final Map<ResultStatus, LongAdder> windowCounts = new EnumMap<>(ResultStatus.class);
     private final LongAdder retries = new LongAdder();
     private final LongAdder windowRetries = new LongAdder();
-    private final Map<String, Long> lastSent = new HashMap<>();  // per worker, for per-window deltas
+    private final Map<String, Long> lastSent = new HashMap<>();
     private long windowStartNanos = System.nanoTime();
-    private ResultPublisher publisher;   // null = not publishing
+    private ResultPublisher publisher;
 
     void setPublisher(ResultPublisher publisher) {
         this.publisher = publisher;
@@ -63,7 +57,6 @@ final class Metrics {
         windowRetries.increment();
     }
 
-    /** Logs the last window (if anything happened) and resets it. */
     synchronized void report(WorkerRegistry registry) {
         final long now = System.nanoTime();
         final double seconds = (now - windowStartNanos) / 1e9;

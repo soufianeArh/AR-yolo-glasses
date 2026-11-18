@@ -17,7 +17,6 @@ std::vector<Detection> Detector::detect_encoded(const std::uint8_t* data, std::s
 
     if (data == nullptr || size == 0) throw BadFrame("empty image bytes");
     const cv::Mat raw(1, static_cast<int>(size), CV_8UC1, const_cast<std::uint8_t*>(data));
-    // IMREAD_COLOR: always 3-channel BGR (drops alpha, expands grayscale) - same as Ultralytics.
     const cv::Mat bgr = cv::imdecode(raw, cv::IMREAD_COLOR);
     if (bgr.empty()) throw BadFrame("could not decode image bytes");
 
@@ -28,12 +27,14 @@ std::vector<Detection> Detector::detect_encoded(const std::uint8_t* data, std::s
     return detect(bgr, timing);
 }
 
+// the model_type metadata decides wich detector class is used
 std::string detect_model_type(const std::string& model_path) {
     const OrtModel peek(model_path, 1);
     const auto type = peek.metadata("model_type");
     return type ? *type : "yolov8";
 }
 
+// no model_type in the metadata means a plain yolov8 export
 std::unique_ptr<Detector> load_detector(const DetectorOptions& options) {
     const std::string type = options.model_type == "auto" ? detect_model_type(options.model_path) : options.model_type;
     if (type == "yolov8") return std::make_unique<YoloV8Detector>(options);
@@ -41,4 +42,4 @@ std::unique_ptr<Detector> load_detector(const DetectorOptions& options) {
     throw std::invalid_argument("unknown model type '" + type + "' (expected yolov8 or yolos)");
 }
 
-}  // namespace ar
+}

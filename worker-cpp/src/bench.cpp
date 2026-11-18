@@ -1,11 +1,3 @@
-// worker-bench: time every stage of detect() for several thread counts.
-//
-//   worker-bench --model models/yolov8n.onnx --image testdata/land/cow-attack-01.png
-//                [--threads 1,2,4,8] [--iters 50] [--warmup 5] [--width 640] [--quality 80]
-//
-// The image is first turned into what the Android app will actually send:
-// resized to --width pixels wide and encoded as JPEG at --quality.
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -27,6 +19,7 @@ struct Stats {
     double avg = 0, p95 = 0;
 };
 
+// median and p95 over all the repeats
 Stats stats(std::vector<double> v) {
     Stats s;
     if (v.empty()) return s;
@@ -37,6 +30,7 @@ Stats stats(std::vector<double> v) {
     return s;
 }
 
+// thread counts come as a comma separated list
 std::vector<int> parse_list(const std::string& s) {
     std::vector<int> out;
     std::stringstream ss(s);
@@ -47,7 +41,7 @@ std::vector<int> parse_list(const std::string& s) {
     return out;
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
     std::string model, image;
@@ -70,7 +64,6 @@ int main(int argc, char** argv) {
     }
 
     try {
-        // Simulate the Android app: resize to ~640 wide, encode JPEG.
         const cv::Mat original = cv::imread(image, cv::IMREAD_COLOR);
         if (original.empty()) throw std::runtime_error("cannot read " + image);
         cv::Mat sent = original;

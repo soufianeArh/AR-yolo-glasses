@@ -1,19 +1,3 @@
-"""
-Step 7.1: "look and hold" test videos made from leaf photos.
-
-Simulates the wearer's head: the view moves across a row of leaves (with motion blur while
-moving), STOPS on one leaf for a while (the "hold"), then moves to the next one.
-Each video gets a timeline JSON: for every hold, the time window and the expected disease,
-so tests can check that the right popup appears at the right moment.
-
-  tools/.venv/Scripts/python tools/make_plant_videos.py                 (2 s holds: backend tests)
-  tools/.venv/Scripts/python tools/make_plant_videos.py --hold 6 --suffix=-6s
-      (6 s holds: the Android app, Step 8.4 - a wearer keeps looking until the answer appears,
-       and a plant inspection takes ~2.5-3 s on the dev laptop)
-
-Reads  testdata/plant/expected.json (+ the images it lists)
-Writes testdata/plant/videos/<name>.mp4 and <name>.timeline.json
-"""
 import argparse
 import json
 import os
@@ -37,7 +21,6 @@ VIDEOS = {
 
 
 def tile(img):
-    """Fit a leaf photo into one screen-sized tile (letterboxed on dark green, like foliage)."""
     canvas = np.full((H, W, 3), (20, 45, 20), np.uint8)
     s = min(W / img.shape[1], H / img.shape[0])
     nw, nh = int(img.shape[1] * s), int(img.shape[0] * s)
@@ -47,8 +30,9 @@ def tile(img):
     return canvas
 
 
+# smooth start and stop like a real head turn
 def ease(t):
-    return t * t * (3 - 2 * t)          # smooth start and stop, like a head turning
+    return t * t * (3 - 2 * t)
 
 
 def main():
@@ -69,23 +53,21 @@ def main():
             path, exp = by_stem[st]
             tiles.append(tile(cv2.imread(os.path.join(ROOT, path))))
             expected.append((path, exp))
-        strip = np.concatenate(tiles, axis=1)               # leaves side by side
+        strip = np.concatenate(tiles, axis=1)
         writer = cv2.VideoWriter(os.path.join(OUT, name + ".mp4"), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
         timeline, t = [], 0.0
 
         def emit(x, blur):
             nonlocal t
-            # keep the view inside the strip (the tremor must not push it past the first/last leaf)
             xi = int(min(max(round(x), 0), strip.shape[1] - W))
             frame = np.ascontiguousarray(strip[:, xi:xi + W])
-            if blur > 1:                                     # horizontal motion blur while moving
+            if blur > 1:
                 k = np.zeros((1, blur), np.float32)
                 k[:] = 1.0 / blur
                 frame = cv2.filter2D(frame, -1, k)
             writer.write(frame)
             t += 1.0 / FPS
 
-        # start half way into a blank view, move onto leaf 0, then hold / move / hold ...
         x_prev = 0.0
         for i, (path, exp) in enumerate(expected):
             x_target = i * W
@@ -97,7 +79,7 @@ def main():
                 emit(x, int(min(31, speed / 8)))
             start = t
             for f in range(int(HOLD_S * FPS)):
-                emit(x_target + 2 * np.sin(f / 5), 0)       # tiny hand/head tremor, not perfectly still
+                emit(x_target + 2 * np.sin(f / 5), 0)
             timeline.append({"hold_start_s": round(start, 2), "hold_end_s": round(t, 2),
                              "image": path, "expected": exp})
             x_prev = x_target

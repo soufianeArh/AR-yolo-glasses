@@ -17,25 +17,17 @@ double ms_since(Clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
-// ------------------------------------------------------------------ antialiased resize
-// A port of torchvision's uint8 bilinear resize with antialias=True (the path the Python
-// processor takes on a CPU): a separable triangle filter whose width grows with the shrink
-// factor (every input pixel contributes when shrinking), weights turned into 16-bit FIXED-POINT
-// integers, horizontal pass first, uint8 image in between, then the vertical pass.
-// Checked against torchvision pixel by pixel: identical on 14/15 test images; on an extreme 5x
-// shrink, 0.25% of pixels differ by 1 level (out of 255).
-
 struct Taps {
-    std::vector<int> start;        // first input index for each output index
-    std::vector<int> count;        // number of taps
-    std::vector<std::int32_t> w;   // fixed-point weights, count[i] of them at i * max_taps
+    std::vector<int> start;
+    std::vector<int> count;
+    std::vector<std::int32_t> w;
     int max_taps = 0;
-    int precision = 0;             // weights are real_weight * 2^precision
+    int precision = 0;
 };
 
 Taps make_taps(int in_size, int out_size) {
     const double scale = static_cast<double>(in_size) / out_size;
-    const double support = scale >= 1.0 ? scale : 1.0;     // bilinear: half-width 1, scaled when shrinking
+    const double support = scale >= 1.0 ? scale : 1.0;
     const double invscale = scale >= 1.0 ? 1.0 / scale : 1.0;
     Taps t;
     t.max_taps = static_cast<int>(std::ceil(support)) * 2 + 1;
@@ -49,7 +41,7 @@ Taps make_taps(int in_size, int out_size) {
         const int n = std::min(static_cast<int>(center + support + 0.5), in_size) - xmin;
         double total = 0;
         for (int k = 0; k < n; ++k) {
-            const double v = std::max(0.0, 1.0 - std::abs((k + xmin - center + 0.5) * invscale));  // triangle
+            const double v = std::max(0.0, 1.0 - std::abs((k + xmin - center + 0.5) * invscale));
             real[static_cast<std::size_t>(i) * t.max_taps + k] = v;
             total += v;
         }
@@ -61,7 +53,6 @@ Taps make_taps(int in_size, int out_size) {
         t.start[i] = xmin;
         t.count[i] = n;
     }
-    // Largest precision whose biggest weight still fits a signed 16-bit integer.
     while (t.precision < 15 && static_cast<int>(0.5 + wmax * (1 << (t.precision + 1))) < (1 << 15)) ++t.precision;
     t.w.resize(real.size());
     for (std::size_t j = 0; j < real.size(); ++j) {
@@ -75,9 +66,10 @@ std::uint8_t to_u8(std::int32_t acc, int precision) {
     return static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
+// same antialiased resize as the python processor or the boxes drift a bit
 cv::Mat resize_antialias(const cv::Mat& src, int out_w, int out_h) {
     cv::Mat cur = src;
-    if (out_w != src.cols) {                               // horizontal pass first
+    if (out_w != src.cols) {
         const Taps th = make_taps(src.cols, out_w);
         const std::int32_t half = 1 << (th.precision - 1);
         cv::Mat mid(src.rows, out_w, CV_8UC3);
@@ -100,7 +92,7 @@ cv::Mat resize_antialias(const cv::Mat& src, int out_w, int out_h) {
         }
         cur = mid;
     }
-    if (out_h != cur.rows) {                               // then vertical
+    if (out_h != cur.rows) {
         const Taps tv = make_taps(cur.rows, out_h);
         const std::int32_t half = 1 << (tv.precision - 1);
         cv::Mat dst(out_h, cur.cols, CV_8UC3);
@@ -131,10 +123,9 @@ int int_after(const std::string& text, const std::string& key, int fallback) {
     return p == std::string::npos ? fallback : std::stoi(text.substr(p + key.size() + 1));
 }
 
-}  // namespace
+}
 
-// Port of transformers' get_size_with_aspect_ratio(image_size, size, max_size, mod_size).
-// Python int() truncates toward zero, round() rounds half to even (std::nearbyint).
+// shortest and longest side rules copied from the huggingface processor
 std::pair<int, int> YolosDetector::input_size(int height, int width, int shortest, int longest, int divisor) {
     double size = shortest;
     double raw_size = -1;
@@ -190,7 +181,6 @@ YolosDetector::YolosDetector(DetectorOptions options)
 std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* timing) {
     if (bgr.empty() || bgr.type() != CV_8UC3) throw BadFrame("expected a non-empty 8-bit BGR image");
 
-    // ---------------------------------------------------------- 1. resize (antialiased) + normalise
     auto t0 = Clock::now();
     const auto [oh, ow] = input_size(bgr.rows, bgr.cols, shortest_, longest_, divisor_);
     if (oh <= 0 || ow <= 0) throw BadFrame("image too small");
@@ -213,18 +203,16 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
     }
     if (timing) timing->preprocess_ms = ms_since(t0);
 
-    // ---------------------------------------------------------- 2. forward pass (abortable)
     t0 = Clock::now();
     const auto outputs = model_.run(input_.data(), {1, 3, oh, ow});
     if (timing) timing->infer_ms = ms_since(t0);
 
-    // ---------------------------------------------------------- 3. softmax, best real class, threshold
     t0 = Clock::now();
-    const auto& ls = outputs[0].shape;   // [1, Q, C+1]
+    const auto& ls = outputs[0].shape;
     const int queries = static_cast<int>(ls[1]);
-    const int classes = static_cast<int>(ls[2]);     // includes "no object" (the last one)
+    const int classes = static_cast<int>(ls[2]);
     const float* logits = outputs[0].data;
-    const float* boxes = outputs[1].data;           // [1, Q, 4] cx, cy, w, h relative
+    const float* boxes = outputs[1].data;
 
     std::vector<Detection> result;
     for (int q = 0; q < queries; ++q) {
@@ -237,13 +225,12 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
             if (l[c] > l[best]) best = c;
         }
         const float score = static_cast<float>(std::exp(static_cast<double>(l[best] - mx)) / sum);
-        if (!(score > opt_.conf_threshold)) continue;      // strictly greater, like transformers
+        if (!(score > opt_.conf_threshold)) continue;
         const float* b = boxes + static_cast<std::size_t>(q) * 4;
         auto c01 = [](float v) { return std::clamp(v, 0.f, 1.f); };
         result.push_back({names_.at(static_cast<std::size_t>(best)), score, c01(b[0] - b[2] / 2), c01(b[1] - b[3] / 2),
                           c01(b[0] + b[2] / 2), c01(b[1] + b[3] / 2), opt_.name});
     }
-    // Highest score first (transformers keeps query order; the order carries no meaning).
     std::stable_sort(result.begin(), result.end(),
                      [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
     if (static_cast<int>(result.size()) > opt_.max_detections) result.resize(static_cast<std::size_t>(opt_.max_detections));
@@ -251,4 +238,4 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
     return result;
 }
 
-}  // namespace ar
+}

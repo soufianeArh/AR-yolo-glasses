@@ -1,22 +1,3 @@
-"""
-Step 7.2: export soufiane-easy's plant-disease model (YOLOS-small, PlantDoc) to ONNX.
-
-  tools/.venv/Scripts/python tools/export_plant_onnx.py
-
-Input:  models/plant-disease/   (config.json, preprocessor_config.json, model.safetensors)
-Output: models/plant.onnx
-
-The model takes images of DIFFERENT sizes (short side 512, long side <= 864, multiple of 16),
-so the export keeps height and width dynamic. It is then checked against PyTorch at every size
-of the test images, because an export can silently freeze the size it was traced with.
-
-Everything the C++ detector needs is written into the ONNX metadata, so it reads it from the
-file instead of hard-coding it:
-  names        {0: 'leaves', 1: 'Apple Scab Leaf', ...}  (same format as Ultralytics exports)
-  model_type   yolos
-  resize       shortest_edge=512 longest_edge=864 divisor=16
-  image_mean / image_std
-"""
 import glob
 import json
 import os
@@ -37,9 +18,8 @@ SRC = os.path.join(ROOT, "models", "plant-disease")
 OUT = os.path.join(ROOT, "models", "plant.onnx")
 
 
+# only pixel_values in and logits and boxes out
 class Wrapper(torch.nn.Module):
-    """Plain tensors in and out: pixel_values -> (logits, pred_boxes)."""
-
     def __init__(self, model):
         super().__init__()
         self.model = model
@@ -62,9 +42,6 @@ def main():
     h = torch.export.Dim("height", min=256, max=1024)
     w = torch.export.Dim("width", min=256, max=1024)
     print(f"exporting with example input {tuple(example.shape)} and dynamic height/width ...")
-    # The position-embedding resize as two MatMuls instead of a bicubic "Resize" node, which
-    # ONNX Runtime runs extremely slowly (3.6 s of ~5 s measured). Same math: see
-    # tools/bicubic_matmul.py. The checks below compare with the ORIGINAL, unpatched model.
     with matmul_bicubic():
         torch.onnx.export(wrapped, (example,), OUT, input_names=["pixel_values"],
                           output_names=["logits", "pred_boxes"],
@@ -87,7 +64,6 @@ def main():
     onnx.save(m, OUT)
     print(f"wrote {OUT} ({os.path.getsize(OUT) / 1e6:.1f} MB)")
 
-    # ------------------------------------------------------------ check every input size
     sess = ort.InferenceSession(OUT, providers=["CPUExecutionProvider"])
     print("input:", [(i.name, i.shape) for i in sess.get_inputs()],
           "outputs:", [(o.name, o.shape) for o in sess.get_outputs()])

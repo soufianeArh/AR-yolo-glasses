@@ -1,17 +1,3 @@
-"""
-Consumer: Redis Stream (written by the Java scheduler) -> Postgres + alerts.
-
-  ~/ar-venv/bin/python -m ar_control.consumer
-
-Reads through a Redis consumer GROUP, so:
-  - each result is processed once by the group (several consumers could share the work);
-  - a result is acknowledged (XACK) only AFTER its database transaction committed. If this
-    process dies in between, the result stays "pending" and is processed again on restart.
-    Storing it twice is prevented by the unique (session_id, frame_id) on the frame table,
-    so the end result is exactly-once storage on top of at-least-once delivery.
-
-Off the hot path: the glasses' popup never waits for any of this.
-"""
 import logging
 import signal
 import time
@@ -34,22 +20,16 @@ class Stop(Exception):
 
 
 def decode(fields: dict) -> tuple:
-    """Stream entry -> (FrameResult, device, received_at). Raises ValueError on a bad entry."""
     try:
         result = FrameResult.FromString(fields[b"pb"])
         device = fields[b"device"].decode()
         received_ms = int(fields[b"received_ms"])
-    except Exception as e:   # missing field, bad protobuf, bad number
+    except Exception as e:
         raise ValueError(f"bad stream entry: {e}") from e
     return result, device, datetime.fromtimestamp(received_ms / 1000, tz=timezone.utc)
 
 
 def process_batch(engine, rules: RuleEngine, entries: list) -> dict:
-    """
-    Store one batch of stream entries in ONE transaction and evaluate the rules.
-    Returns counts. Bad entries are skipped (and counted) - they are still acknowledged,
-    otherwise one broken message would block the stream forever.
-    """
     stats = {"frames": 0, "duplicates": 0, "detections": 0, "alerts": 0, "invalid": 0}
     rules.begin_batch()
     try:
@@ -69,7 +49,7 @@ def process_batch(engine, rules: RuleEngine, entries: list) -> dict:
                     .on_conflict_do_nothing(constraint="uq_frame_session_frame")
                     .returning(frame.c.id)
                 ).scalar()
-                if pk is None:                       # delivered again after a crash: already stored
+                if pk is None:
                     stats["duplicates"] += 1
                     continue
                 stats["frames"] += 1
@@ -109,22 +89,20 @@ class Consumer:
         self.stopping = False
 
     def ensure_group(self):
-        """Create the group if missing. Start at id 0: results already in the stream are not skipped."""
         try:
             self.r.xgroup_create(self.stream, self.group, id="0", mkstream=True)
             log.info("created consumer group '%s' on stream '%s'", self.group, self.stream)
         except redis.ResponseError as e:
+            # the group already being there is fine
             if "BUSYGROUP" not in str(e):
                 raise
 
     def read(self, pending: bool, block_ms: int):
-        """pending=True: our own delivered-but-unacknowledged entries (after a crash)."""
         resp = self.r.xreadgroup(self.group, self.name, {self.stream: "0" if pending else ">"},
                                  count=self.batch, block=None if pending else block_ms)
         return resp[0][1] if resp else []
 
     def handle(self, entries) -> bool:
-        """Process + acknowledge. Returns False if the database failed (entries stay pending)."""
         if not entries:
             return True
         try:
@@ -132,13 +110,13 @@ class Consumer:
         except Exception as e:
             log.error("database error, batch of %d kept pending, will retry: %s", len(entries), e)
             return False
-        self.r.xack(self.stream, self.group, *[eid for eid, _ in entries])
+        # ack only after the commit so nothing is lost if we crash in between
+        self.r.xack(self.stream,self.group, *[eid for eid, _ in entries])
         for k, v in stats.items():
             self.totals[k] += v
         return True
 
     def run_once(self, block_ms=1000) -> int:
-        """One read-process-ack cycle (used by tests). Returns entries handled."""
         self.ensure_group()
         entries = self.read(pending=True, block_ms=0) or self.read(pending=False, block_ms=block_ms)
         return len(entries) if self.handle(entries) else 0
@@ -146,7 +124,7 @@ class Consumer:
     def run(self):
         backoff = 0.5
         last_log = time.monotonic()
-        recovering = True        # first: our own pending entries from a previous crash
+        recovering = True
         connected = None
         while not self.stopping:
             try:
@@ -160,13 +138,13 @@ class Consumer:
                              self.stream, self.name, self.group)
                     connected = True
                 if not self.handle(entries):
-                    recovering = True        # re-read them from the pending list
+                    recovering = True
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 5)
                     continue
                 backoff = 0.5
             except redis.ResponseError as e:
-                if "NOGROUP" in str(e):      # Redis restarted without data: group is gone, recreate
+                if "NOGROUP" in str(e):
                     log.warning("consumer group missing (Redis restarted?), recreating")
                     recovering = True
                     continue

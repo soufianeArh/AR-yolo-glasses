@@ -1,14 +1,3 @@
-"""
-Markdown document -> PDF, for the project's short documents (V1.md, V1_zh.md, ...).
-
-  python tools/md_to_pdf.py V1_zh.md            -> V1_zh.pdf next to it
-  python tools/md_to_pdf.py V1.md out/V1.pdf
-
-How: a small converter for the Markdown these documents use (headings, paragraphs, **bold**,
-tables, images, ```mermaid blocks, <details>) -> one HTML page -> Microsoft Edge prints it to PDF
-(headless). Edge has the Chinese fonts (Microsoft YaHei) and colour emojis, and draws the Mermaid
-diagrams with mermaid.js (loaded from the jsdelivr CDN: needs internet). No pip packages needed.
-"""
 import html
 import os
 import re
@@ -46,6 +35,7 @@ def inline(text: str) -> str:
     return t
 
 
+# only the markdown these docs use and not a full parser
 def convert(md: str, base_dir: str) -> str:
     out, lines, i = [], md.splitlines(), 0
     while i < len(lines):
@@ -62,7 +52,7 @@ def convert(md: str, base_dir: str) -> str:
                 j += 1
             out.append("<pre><code>" + html.escape("\n".join(lines[i + 1:j])) + "</code></pre>")
             i = j + 1
-        elif line.startswith("<details>"):                           # source blocks: not printed
+        elif line.startswith("<details>"):
             while not lines[i].startswith("</details>"):
                 i += 1
             i += 1

@@ -9,13 +9,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Java scheduler (Step 4, v1).
- *
- * One gRPC port serves both:
- *   ar.v1.FrameStream/Stream       Android app <-> scheduler (frames in, results out)
- *   ar.v1.WorkerControl/Heartbeat  C++ workers -> scheduler (registration + load)
- */
 public final class Main {
 
     public static void main(String[] args) throws Exception {
@@ -36,7 +29,6 @@ public final class Main {
         FrameStreamService frames = new FrameStreamService(registry, metrics, cfg, publisher);
 
         Server server = Grpc.newServerBuilderForPort(cfg.port(), InsecureServerCredentials.create())
-                // Virtual threads: handlers never need a thread pool sized by hand.
                 .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .maxInboundMessageSize(8 * 1024 * 1024)
                 .addService(ServerInterceptors.intercept(frames, new FrameStreamService.AuthInterceptor()))
@@ -55,6 +47,7 @@ public final class Main {
                     TimeUnit.SECONDS);
         }
 
+        // stop taking frames first and then flush what is left for redis
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             Log.info("shutting down");
             server.shutdown();
@@ -69,7 +62,6 @@ public final class Main {
             Log.info("stopped. totals:" + metrics.totals());
         }, "shutdown"));
 
-        // Tests wait for this exact line.
         Log.info("READY listening on 0.0.0.0:" + cfg.port() + ", frame deadline " + cfg.deadlineMs()
                 + " ms" + (cfg.modelDeadlinesMs().isEmpty() ? "" : " (per model: " + cfg.modelDeadlinesMs() + ")")
                 + ", heartbeat timeout " + cfg.heartbeatTimeoutMs() + " ms, session cap "

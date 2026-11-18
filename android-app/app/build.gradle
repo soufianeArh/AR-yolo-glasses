@@ -4,8 +4,8 @@ plugins {
     id 'com.google.protobuf'
 }
 
-def grpcVersion = '1.85.1'        // same gRPC as the Java scheduler
-def protobufVersion = '4.36.2'    // same protobuf as the Java scheduler (lite runtime on Android)
+def grpcVersion = '1.85.1'
+def protobufVersion = '4.36.2'
 
 android {
     namespace 'com.soufiane.ar.glasses'
@@ -13,8 +13,6 @@ android {
 
     defaultConfig {
         applicationId 'com.soufiane.ar.glasses'
-        // Low on purpose: the Android version under the glasses' WEBB OS is unknown, the app must
-        // install there (Android 8.0 = API 26).
         minSdk 26
         targetSdk 34
         versionCode 1
@@ -33,7 +31,6 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
-    // The shared contract lives outside the project: AR/proto/ar/v1/detection.proto
     sourceSets {
         main {
             proto {
@@ -41,7 +38,6 @@ android {
             }
         }
     }
-    // Unit tests (app/src/test) run on the PC's JVM: android.util.Log etc. return defaults there.
     testOptions {
         unitTests.returnDefaultValues = true
     }
@@ -52,6 +48,7 @@ android {
     }
 }
 
+// lite runtime on android but the same proto as the scheduler
 protobuf {
     protoc {
         artifact = "com.google.protobuf:protoc:${protobufVersion}"
@@ -78,7 +75,7 @@ dependencies {
     implementation "io.grpc:grpc-protobuf-lite:${grpcVersion}"
     implementation "io.grpc:grpc-stub:${grpcVersion}"
     implementation "com.google.protobuf:protobuf-javalite:${protobufVersion}"
-    compileOnly 'org.apache.tomcat:annotations-api:6.0.53'   // @Generated in gRPC's generated code
+    compileOnly 'org.apache.tomcat:annotations-api:6.0.53'
 
     testImplementation 'junit:junit:4.13.2'
 }

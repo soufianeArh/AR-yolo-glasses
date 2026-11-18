@@ -21,36 +21,6 @@ import com.soufiane.ar.proto.v1.FrameResult
 import java.io.File
 import java.util.concurrent.Executors
 
-/**
- * The AR glasses app. A fully black screen (see-through on optical AR glasses) + the popup.
- *
- * Settings (8.6, [AppSettings]): saved between launches; edit them on the settings screen
- * (LONG-PRESS anywhere, or the menu key) or with launch extras, which are saved too:
- *   adb shell am start -n com.soufiane.ar.glasses/.MainActivity
- *     --es host <ip> --ei port <port>   the Java scheduler (WSL's IP on the Windows 10 dev PC:
- *                                       10.0.2.2 does not reach WSL there)
- *     --es source camera | test-image | video:<file in /sdcard/Android/data/com.soufiane.ar.glasses/files/>
- *     --es mode inspect | stream        plant look-and-hold (8.4) | every frame (8.3)
- *     --es model default | plant        stream mode's model
- *     --ei fps 8  --ei votes 2  --ez debug true  --ef minconf 0.4  --es popup_classes "person,cow"
- *     --es crops "corn,tomato,potato"   inspect: only these crops (empty = any plant)
- *     --ez settings true                open the settings screen
- *
- * 8.9: opened from the welcome / demo screens. Videos are always shown (demos); the camera image is
- * shown unless the setting "show camera" is off (optical see-through glasses: black = clear view).
- * Bottom-left bar: what is playing + Home / Videos / Camera / Pause / Settings. Always visible while
- * an image is shown; on a black (glasses) screen it appears on a tap or any key and hides after 4 s. Look-and-hold videos with a timeline add "expected: ... ✓/✗" under
- * each verdict. Back returns to the previous screen.
- *
- * Lifecycle: the pipeline (camera source + gRPC stream) runs only while the app is in front:
- * onResume starts it, onPause stops it (the scheduler sees the session close). onPause, not onStop:
- * onStop only comes once the next screen has drawn - 3.7 s after HOME on the loaded emulator, with a
- * frame still sent meanwhile (8.6 test). Answers of a stopped pipeline are dropped. Loaded videos
- * are kept, so coming back does not decode them again.
- *
- * Logcat (tag ARGlasses): CONFIG / SETTINGS_SAVED / PIPELINE_START / PIPELINE_STOP, plus the
- * RESULT / STATS / INSPECT_* / POPUP_* lines of each mode.
- */
 class MainActivity : Activity() {
 
     companion object {
@@ -65,20 +35,17 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var answer: TextView
 
-    // The running pipeline. [generation] changes on every stop, so a setup thread that finishes
-    // after the screen was left drops its work instead of streaming in the background.
     private val pipeLock = Any()
     private var generation = 0
     private var source: FrameSource? = null
-    private var closer: (() -> Unit)? = null                         // closes the connection
-    private var cachedSource: Pair<String, FileSource>? = null          // "file@fps" -> decoded frames
-    // Setups run one at a time: leaving and coming back while a video decodes then waits for that
-    // decode and reuses it, instead of decoding the same video twice in parallel (8.6 test: ~95 s).
+    private var closer: (() -> Unit)? = null
+    private var cachedSource: Pair<String, FileSource>? = null
+    // one setup at a time so the same video is never decoded twice in paralel
     private val setupExecutor = Executors.newSingleThreadExecutor { Thread(it, "pipeline-setup") }
 
     private var cameraAsked = false
     private lateinit var bar: LinearLayout
-    private lateinit var loading: TextView                         // 8.9: "Loading video... 45%" (demos)
+    private lateinit var loading: TextView
     private lateinit var pauseButton: Button
     private lateinit var homeButton: Button
     private lateinit var cameraButton: Button
@@ -93,9 +60,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)     // glasses: never sleep while in use
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        answer = TextView(this).apply {                  // single image (8.2) / "checking leaf..." indicator
+        answer = TextView(this).apply {
             setTextColor(Color.rgb(160, 160, 160))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setPadding(48, 40, 48, 40)
@@ -125,7 +92,7 @@ class MainActivity : Activity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM or Gravity.START))
             isLongClickable = true
-            setOnLongClickListener { openSettings(); true }                  // glasses touchpad: long-press
+            setOnLongClickListener { openSettings(); true }
             setOnTouchListener { _, e -> if (e.action == MotionEvent.ACTION_DOWN) showBar(); false }
         }
         val lang0 = AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE)).language
@@ -137,13 +104,12 @@ class MainActivity : Activity() {
         sourceLabel = TextView(this).apply {
             setTextColor(Color.rgb(230, 230, 230))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setShadowLayer(4f, 0f, 0f, Color.BLACK)                         // readable on any image
+            setShadowLayer(4f, 0f, 0f, Color.BLACK)
             setPadding(6, 0, 0, 8)
         }
         bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(20, 14, 12, 14)
-            // A solid dark panel: readable over any image (bright slides, sky, text).
             background = android.graphics.drawable.GradientDrawable().apply {
                 setColor(Color.argb(215, 10, 10, 10)); cornerRadius = 24f
             }
@@ -173,21 +139,15 @@ class MainActivity : Activity() {
         applyLaunchExtras(intent)
     }
 
-    /**
-     * `am start` on the running app (singleTop): save the new extras only. Android pauses the app
-     * before onNewIntent and resumes it after, and onResume restarts the pipeline with them.
-     * (Restarting here too started it TWICE: one stream left running untracked - 8.6 test.)
-     */
+    // only save the extras here because onResume restarts the pipeline anyway
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         applyLaunchExtras(intent)
     }
 
-    /** Saves the launch extras into the settings, then forgets them (so the settings screen wins later). */
     private fun applyLaunchExtras(i: Intent?): Boolean {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val extras = i?.extras
-        // 8.9: the demo list sends the video's titles (English + Chinese); remembered per source, for the bar.
         val title = extras?.getString("title")
         val titled = extras?.getString("source")
         if (title != null && titled != null) prefs.edit().putString("title_$titled", title)
@@ -209,7 +169,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE)).language != builtLang) {
-            recreate()                                // language changed in Settings: redraw the bar
+            recreate()
             return
         }
         paused = false
@@ -217,8 +177,6 @@ class MainActivity : Activity() {
         startPipeline()
         showBar()
     }
-
-    // ------------------------------------------------------------------ icons (8.9)
 
     private fun barButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
@@ -240,18 +198,17 @@ class MainActivity : Activity() {
             .apply { setMargins(0, 0, 16, 0) }
     }
 
-    /** Shows the bar: for good while an image is shown, else for 4 s (any tap or key). */
     private fun showBar() {
         bar.visibility = View.VISIBLE
         bar.removeCallbacks(hideBar)
         if (!alwaysShowBar) bar.postDelayed(hideBar, 4000)
     }
 
-    /** What is playing + which buttons make sense; called whenever the pipeline (re)starts. */
+    // bar stays visible while an image is shown and hides on a black screen
     private fun updateBar() {
         val s = settings
         alwaysShowBar = showsFrames(s)
-        cameraButton.visibility = if (s.source == "camera") View.GONE else View.VISIBLE   // only moves that change something
+        cameraButton.visibility = if (s.source == "camera") View.GONE else View.VISIBLE
         val what = Lang.t(if (s.mode == "inspect") "plant_inspection" else "object_stream")
         sourceLabel.text = when {
             s.source == "camera" -> Lang.t("live_camera") + "  ·  $what"
@@ -267,7 +224,6 @@ class MainActivity : Activity() {
         showBar()
     }
 
-    /** Live camera inspection, from wherever we are. */
     private fun switchToCamera() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val s = AppSettings.load(prefs).copy(source = "camera", mode = "inspect")
@@ -278,7 +234,6 @@ class MainActivity : Activity() {
         startPipeline()
     }
 
-    /** Back to the demo list (the existing one if it is below us: no pile of screens). */
     private fun openVideos() {
         startActivity(Intent(this, DemoListActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
@@ -289,7 +244,7 @@ class MainActivity : Activity() {
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_BACK) {
             val wasHidden = bar.visibility != View.VISIBLE
             showBar()
-            if (wasHidden && event.keyCode != KeyEvent.KEYCODE_MENU) {   // first key only wakes the icons
+            if (wasHidden && event.keyCode != KeyEvent.KEYCODE_MENU) {
                 homeButton.requestFocus()
                 return true
             }
@@ -317,6 +272,8 @@ class MainActivity : Activity() {
         Log.i(TAG, "PAUSE paused=$paused")
     }
 
+    // stop here and not in onStop
+    // onStop only comes once the next screen is drawn and frames still go out meanwhile
     override fun onPause() {
         stopPipeline("screen left")
         super.onPause()
@@ -330,7 +287,6 @@ class MainActivity : Activity() {
     private fun showsFrames(s: AppSettings) =
         s.debug || s.source.startsWith("video:") || (s.source == "camera" && s.showCamera)
 
-    /** False once the pipeline [gen] was stopped: its late answers must not reach the screen. */
     private fun isCurrent(gen: Int) = synchronized(pipeLock) { gen == generation }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -342,19 +298,16 @@ class MainActivity : Activity() {
     }
 
     private fun openSettings() {
-        startActivity(Intent(this, SettingsActivity::class.java))           // onPause -> pipeline stops
+        startActivity(Intent(this, SettingsActivity::class.java))
     }
 
-    // ------------------------------------------------------------------ pipeline
-
     private fun startPipeline() {
-        stopPipeline("restart")                       // never two pipelines, whatever calls this twice
+        stopPipeline("restart")
         settings = AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE))
         Lang.current = settings.language
         val gen = synchronized(pipeLock) { generation }
         Log.i(TAG, "CONFIG ${settings.describe()}")
         status.visibility = if (settings.debug) View.VISIBLE else View.GONE
-        // Videos are demos: always shown. The camera: shown unless switched off for see-through glasses.
         val showFrames = settings.debug || settings.source.startsWith("video:") ||
             (settings.source == "camera" && settings.showCamera)
         debugView.visibility = if (showFrames) View.VISIBLE else View.INVISIBLE
@@ -389,7 +342,6 @@ class MainActivity : Activity() {
         if (src != null || close != null) Log.i(TAG, "PIPELINE_STOP reason=\"$why\"")
     }
 
-    /** Runs [start] only if the screen was not left meanwhile; returns false if dropped. */
     private inline fun ifStillCurrent(gen: Int, start: () -> Unit): Boolean = synchronized(pipeLock) {
         if (gen != generation) return false
         start()
@@ -404,7 +356,7 @@ class MainActivity : Activity() {
         }
         setStatus("loading $name ...")
         setupExecutor.execute {
-            if (!isCurrent(gen)) {                                       // left before it even began
+            if (!isCurrent(gen)) {
                 Log.i(TAG, "PIPELINE_DROPPED (screen left before loading)")
                 return@execute
             }
@@ -427,13 +379,12 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 8.7: the device camera (emulator: the PC webcam). Asks for the permission the first time. */
     private fun startCamera(gen: Int, s: AppSettings) {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            if (!cameraAsked) {                       // once: a refusal must not bring the dialog back forever
+            if (!cameraAsked) {
                 cameraAsked = true
                 Log.i(TAG, "CAMERA_PERMISSION requested")
-                requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)  // onResume runs again after the answer
+                requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
             } else {
                 setStatus(Lang.t("camera_refused"), error = true)
             }
@@ -456,7 +407,6 @@ class MainActivity : Activity() {
         if (!ok) setStatus(Lang.t("camera_refused"), error = true)
     }
 
-    /** Starts the chosen mode on [src] unless the screen was left meanwhile. */
     private fun startWith(gen: Int, s: AppSettings, src: FrameSource) {
         val started = ifStillCurrent(gen) {
             if (s.mode == "inspect") startInspecting(gen, s, src) else startStreaming(gen, s, src)
@@ -470,17 +420,14 @@ class MainActivity : Activity() {
         }
     }
 
-    // ------------------------------------------------------------------ connection (8.7)
-
-    private var connLine: String? = null          // shown bottom-right while the server is unreachable
+    private var connLine: String? = null
     private var connWasLost = false
 
-    /** What the wearer sees when the server goes away and comes back. */
     private fun showConnState(gen: Int, st: Connection.State, why: String) = runOnUiThread {
         if (!isCurrent(gen)) return@runOnUiThread
         when (st) {
             Connection.State.CONNECTED -> {
-                if (connWasLost) popup.show("conn", Lang.t("server_back"), PopupRules.GREEN)
+                if(connWasLost) popup.show("conn", Lang.t("server_back"), PopupRules.GREEN)
                 connWasLost = false
                 connLine = null
             }
@@ -498,7 +445,6 @@ class MainActivity : Activity() {
         answer.text = connLine ?: ""
     }
 
-    /** 8.3: every frame to [AppSettings.model]; popup = a stable top object. Call under [pipeLock]. */
     private fun startStreaming(gen: Int, s: AppSettings, src: FrameSource) {
         lateinit var ctrl: StreamController
         val conn = Connection(s.host, s.port, DEVICE_TOKEN, { r, rtt -> ctrl.onResult(r, rtt) }) { st, why ->
@@ -523,11 +469,10 @@ class MainActivity : Activity() {
         src.start(s.fps.toDouble(), ctrl::onFrame)
     }
 
-    /** 8.4: plant inspection "look and hold". Call under [pipeLock]. */
     private fun startInspecting(gen: Int, s: AppSettings, src: FrameSource) {
         lateinit var ctrl: InspectController<android.graphics.Bitmap>
         val conn = Connection(s.host, s.port, DEVICE_TOKEN, { r, rtt -> ctrl.onResult(r, rtt) }) { st, why ->
-            if (st == Connection.State.DISCONNECTED) ctrl.onStreamLost()       // a check in progress ends
+            if (st == Connection.State.DISCONNECTED) ctrl.onStreamLost()
             showConnState(gen, st, why)
         }
         ctrl = InspectController.forBitmaps(conn::send, s.votes, s.crops,
@@ -537,20 +482,17 @@ class MainActivity : Activity() {
         }
         closer = conn::close
         conn.start()
-        // No server: no inspection (a check would only fail). Frames are skipped until it is back.
         src.start(s.fps.toDouble()) { f, pos -> if (conn.state == Connection.State.CONNECTED) ctrl.onFrame(f, pos) }
     }
 
-    /** The wearer's view: a small "checking..." while the plant model works, then the popup. */
     private fun showInspection(snap: InspectController.Snapshot<*>, s: AppSettings) {
         if (connLine == null) answer.text = snap.checking ?: ""
         val v = snap.verdict ?: return
-        if (snap.verdictHold == lastPopupHold) return                  // already shown for this hold
+        if (snap.verdictHold == lastPopupHold) return
         lastPopupHold = snap.verdictHold
-        if (connWasLost) return                                     // "no connection" says it already
+        if (connWasLost) return
         val p = PopupRules.forVerdict(v, s.minConfFor("plant"))
         Log.i(TAG, "POPUP_VERDICT hold=${snap.verdictHold} kind=${v.kind} label=${v.label} sure=${p.sure}")
-        // 8.9: test videos know the right answer of each leaf - show it under the verdict.
         val expected = timeline?.expectedAt(snap.verdictPosMs)
         val text = if (expected != null) {
             val line = Timeline.verdictLine(expected, v.label)
@@ -560,7 +502,6 @@ class MainActivity : Activity() {
         popup.show("hold${snap.verdictHold}", text, p.color)
     }
 
-    /** 8.2: send one bundled leaf image, model plant. */
     private fun startSingleImage(gen: Int, s: AppSettings) {
         val image = assets.open("test-leaf.png").use { it.readBytes() }
         ifStillCurrent(gen) {
@@ -576,7 +517,6 @@ class MainActivity : Activity() {
     }
 
     private fun showResult(r: FrameResult, roundTripMs: Long) {
-        // One line per detection, highest first - and the same as one log line for tests.
         val dets = r.detectionsList.sortedByDescending { it.confidence }
         val log = buildString {
             append("RESULT status=${r.status} worker=${r.workerId} infer_ms=${r.inferMs} ")
@@ -592,7 +532,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Status line (debug only); errors are always shown, the wearer must know something is wrong. */
     private fun setStatus(text: String, error: Boolean = false) {
         runOnUiThread {
             status.text = text

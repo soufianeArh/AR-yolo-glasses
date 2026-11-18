@@ -1,4 +1,3 @@
-"""The REST API: rules CRUD + validation, alerts (ack is idempotent), history, stats, health."""
 from datetime import datetime, timezone
 
 import pytest
@@ -18,6 +17,7 @@ RULE = {"name": "cows", "label": "Cow", "min_confidence": 0.6, "min_count": 2, "
         "severity": "high"}
 
 
+# full round trip create read patch delete
 def test_rule_crud(client):
     r = client.post("/rules", json=RULE)
     assert r.status_code == 201
@@ -38,7 +38,7 @@ def test_rule_validation(client):
     assert client.post("/rules", json={**RULE, "severity": "urgent"}).status_code == 422
     assert client.post("/rules", json={**RULE, "label": ""}).status_code == 422
     assert client.post("/rules", json=RULE).status_code == 201
-    assert client.post("/rules", json=RULE).status_code == 409          # duplicate name
+    assert client.post("/rules", json=RULE).status_code == 409
     assert client.patch("/rules/1", json={}).status_code == 400
     assert client.patch("/rules/999", json={"enabled": False}).status_code == 404
 
@@ -94,6 +94,6 @@ def test_contains_rule_through_the_api(client):
                                     "min_confidence": 0.5, "severity": "high"})
     assert r.status_code == 201 and r.json()["match"] == "contains" and r.json()["label"] == "blight"
     assert client.post("/rules", json={**RULE, "name": "x", "match": "regex"}).status_code == 422
-    assert client.post("/rules", json={**RULE, "name": "y"}).json()["match"] == "exact"     # default
+    assert client.post("/rules", json={**RULE, "name": "y"}).json()["match"] == "exact"
     rid = r.json()["id"]
     assert client.patch(f"/rules/{rid}", json={"match": "exact"}).json()["match"] == "exact"

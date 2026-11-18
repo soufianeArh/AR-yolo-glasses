@@ -1,10 +1,9 @@
-# Python control plane (Step 6). Installed in ~/ar-venv (WSL).
 fastapi>=0.163
 uvicorn[standard]>=0.54
 sqlalchemy>=2.1
 alembic>=1.20
 psycopg[binary]>=3.3
 redis>=8.1
-grpcio-tools>=1.85      # generates the Python code from proto/ar/v1/detection.proto
+grpcio-tools>=1.85
 pytest>=9.2
-httpx>=0.28             # FastAPI TestClient
+httpx>=0.28

@@ -8,7 +8,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** What the popup says (8.5) and the app settings' validation (8.6). */
 class PopupRulesTest {
 
     private fun verdict(kind: Kind, label: String = "Corn rust leaf", conf: Float = 0.9f, agree: Int = 2, frames: Int = 2) =
@@ -55,27 +54,24 @@ class PopupRulesTest {
         assertTrue(p.text, p.text.startsWith("Unsure: Corn rust leaf or Corn leaf blight?"))
     }
 
-    // ------------------------------------------------------------------ stream mode
-
     @Test
+    // this is what stops the flicker in stream mode
     fun streamNeedsTheSameTopTwiceInARow() {
         val s = PopupRules.StableTop(0.5f, emptySet())
         assertNull(s.next(listOf("person" to 0.9f, "cow" to 0.6f)))
         assertEquals("person" to 0.92f, s.next(listOf("person" to 0.92f)))
-        assertEquals("person", s.next(listOf("person" to 0.8f))!!.first)       // stays
-        assertNull(s.next(listOf("cow" to 0.7f)))                              // one odd frame: no popup
-        assertNull(s.next(listOf("person" to 0.9f)))                           // and the count restarts
+        assertEquals("person", s.next(listOf("person" to 0.8f))!!.first)
+        assertNull(s.next(listOf("cow" to 0.7f)))
+        assertNull(s.next(listOf("person" to 0.9f)))
     }
 
     @Test
     fun streamIgnoresWeakAndFilteredClasses() {
         val s = PopupRules.StableTop(0.5f, setOf("cow"))
-        repeat(3) { assertNull(s.next(listOf("person" to 0.95f, "cow" to 0.4f))) }   // person filtered, cow weak
+        repeat(3) { assertNull(s.next(listOf("person" to 0.95f, "cow" to 0.4f))) }
         assertNull(s.next(listOf("person" to 0.95f, "cow" to 0.7f)))
         assertEquals("cow", s.next(listOf("person" to 0.95f, "cow" to 0.7f))!!.first)
     }
-
-    // ------------------------------------------------------------------ settings (8.6)
 
     @Test
     fun settingsAreValidated() {

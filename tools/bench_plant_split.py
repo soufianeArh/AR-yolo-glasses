@@ -1,13 +1,3 @@
-"""
-Step 7.4: how to split the 4 CPU cores between COCO workers and the plant worker.
-
-For each split: COCO stream alone (8 fps, 1 session) as a baseline, then the same COCO stream
-WHILE a "look and hold" plant inspection is sent every ~2.5 s (one at a time, like a wearer
-looking at leaf after leaf). The plant deadline is set long (6 s) so the real plant latency is
-measured; the report shows what share would fit 2.5 s / 3.5 s.
-
-  ~/ar-venv/bin/python tools/bench_plant_split.py     (inside WSL, from the AR folder; ~3 min)
-"""
 import glob
 import json
 import os
@@ -21,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_scheduler import CLIENT, PY, ROOT, SCHEDULER, WORKER, Proc  # noqa: E402
 import fake_client  # noqa: E402
 
-SPLITS = [  # (coco workers, coco threads, plant threads)
+SPLITS = [
     (2, 1, 3),
     (2, 2, 2),
     (3, 2, 2),
@@ -37,6 +27,7 @@ def pct(v, p):
     return s[max(0, min(len(s) - 1, -(-p * len(s) // 100) - 1))]
 
 
+# coco frames at 8 fps while plant inspections run next to it
 def coco_stream():
     out = subprocess.run([PY, CLIENT, "--target", f"127.0.0.1:{SCHED_PORT}", "video", "--seconds", str(SECONDS),
                           "--fps", "8", "--max-in-flight", "2", "--json", "--raw"], capture_output=True, text=True,
@@ -48,7 +39,6 @@ def coco_stream():
 
 
 def plant_inspections(stop, frames, out):
-    """One inspection every ~2.5 s, one at a time."""
     s = fake_client.Stream(f"127.0.0.1:{SCHED_PORT}", "bench-glasses", max_in_flight=1, model="plant")
     i = 0
     while not stop.is_set():
@@ -63,7 +53,6 @@ def plant_inspections(stop, frames, out):
 
 def main():
     os.chdir(ROOT)
-    # what "look and hold" sends: mid-hold frames of the plant videos, as ~640 px JPEGs
     frames = []
     import cv2
     for tl in sorted(glob.glob("testdata/plant/videos/*.timeline.json")):

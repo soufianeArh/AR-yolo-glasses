@@ -18,7 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The scheduling rules, with a fake clock and in-process channels (no network, no sleeping). */
 class WorkerRegistryTest {
 
     private static final int TIMEOUT_MS = 3000;
@@ -26,6 +25,7 @@ class WorkerRegistryTest {
     private WorkerRegistry registry;
 
     @BeforeEach
+    // fresh registry for every test
     void setUp() {
         registry = new WorkerRegistry(TIMEOUT_MS,
                 address -> InProcessChannelBuilder.forName("test-" + address).build(), now::get);
@@ -69,9 +69,7 @@ class WorkerRegistryTest {
         String first = reserveId();
         String second = reserveId();
         String third = reserveId();
-        // three idle workers -> three different workers, never the same one twice
         assertEquals(3, List.of(first, second, third).stream().distinct().count());
-        // free one of them: it becomes the only least-loaded worker, so it is picked next
         registry.release(worker(second));
         assertEquals(second, reserveId());
     }
@@ -86,7 +84,7 @@ class WorkerRegistryTest {
             advanceMs(1);
             WorkerRegistry.Worker w = registry.reserve("default", null).orElseThrow();
             picks.add(w.id);
-            registry.release(w);   // answered at once: every worker is always idle
+            registry.release(w);
         }
         for (String id : List.of("w1", "w2", "w3")) {
             assertEquals(2, picks.stream().filter(id::equals).count(), "picks: " + picks);
@@ -103,7 +101,6 @@ class WorkerRegistryTest {
             assertEquals("w2", w.id);
             registry.release(w);
         }
-        // only the failed worker exists -> nothing to retry on
         heartbeat("w2", "a:2");
         advanceMs(TIMEOUT_MS + 1);
         heartbeat("w1", "a:1");
@@ -124,10 +121,10 @@ class WorkerRegistryTest {
         advanceMs(TIMEOUT_MS - 1);
         assertEquals("w1", reserveId());
         registry.release(worker("w1"));
-        advanceMs(2);                             // now past the timeout
+        advanceMs(2);
         assertFalse(registry.healthy(worker("w1")));
         assertEquals(null, reserveId());
-        heartbeat("w1", "a:1");                   // heartbeats resume
+        heartbeat("w1", "a:1");
         assertEquals("w1", reserveId());
     }
 
@@ -148,10 +145,10 @@ class WorkerRegistryTest {
     @Test
     void sameIdFromAnotherAddressIsRejectedWhileTheFirstIsAlive() {
         assertTrue(heartbeat("w1", "a:1"));
-        assertFalse(heartbeat("w1", "a:9"));      // duplicate id, first one still alive
+        assertFalse(heartbeat("w1", "a:9"));
         assertEquals("a:1", worker("w1").address);
-        advanceMs(TIMEOUT_MS + 1);                // first one died
-        assertTrue(heartbeat("w1", "a:9"));       // same id restarted on another port: accepted
+        advanceMs(TIMEOUT_MS + 1);
+        assertTrue(heartbeat("w1", "a:9"));
         assertEquals("a:9", worker("w1").address);
     }
 
@@ -171,7 +168,6 @@ class WorkerRegistryTest {
         start.countDown();
         for (var f : futures) f.get(5, TimeUnit.SECONDS);
         pool.shutdown();
-        // 8 frames at the same instant on 4 idle workers: exactly 2 each, never 3 on one
         for (int i = 1; i <= 4; i++) {
             assertEquals(2, worker("w" + i).inFlight.get(), "w" + i);
         }

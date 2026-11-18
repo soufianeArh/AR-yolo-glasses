@@ -1,9 +1,3 @@
-"""
-The shared contract (proto/ar/v1/detection.proto), as Python classes.
-
-Generated on first import into ar_control/_gen, so the Python side can never drift from the
-.proto the Java scheduler and the C++ workers use.
-"""
 import os
 import sys
 
@@ -13,6 +7,7 @@ _PROTO = os.path.join(_PROTO_DIR, "ar", "v1", "detection.proto")
 _GEN = os.path.join(_HERE, "_gen")
 
 
+# stubs are generated from the proto at import time
 def _generate():
     from grpc_tools import protoc
     os.makedirs(_GEN, exist_ok=True)

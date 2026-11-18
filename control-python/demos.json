@@ -1,5 +1,5 @@
 {
-  "_comment": "Step 8.9: demo videos the Android app can list and download (GET /demos). Paths are relative to AR_DEMO_ROOT (default: the repo root). mode: inspect = plant look-and-hold, stream = every frame (COCO). timeline: optional, the expected answer per hold.",
+  "_comment": "demo videos the android app lists and downloads, paths are relative to the repo root",
   "demos": [
     {"id": "corn-look-and-hold", "title": "Corn leaves - look and hold", "crop": "corn", "mode": "inspect", "video": "testdata/plant/videos/corn-look-and-hold-6s.mp4", "timeline": "testdata/plant/videos/corn-look-and-hold-6s.timeline.json", "title_zh": "玉米叶片 - 注视检测"},
     {"id": "tomato-look-and-hold", "title": "Tomato leaves - look and hold", "crop": "tomato", "mode": "inspect", "video": "testdata/plant/videos/tomato-look-and-hold-6s.mp4", "timeline": "testdata/plant/videos/tomato-look-and-hold-6s.timeline.json", "title_zh": "番茄叶片 - 注视检测"},

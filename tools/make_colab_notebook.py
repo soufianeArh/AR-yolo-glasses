@@ -1,14 +1,3 @@
-"""
-Step 7.6: build the Google Colab notebook that trains our own plant-disease YOLOv8.
-
-  python tools/make_colab_notebook.py   ->   notebooks/train_plant_yolov8.ipynb
-
-The converter cell is copied from tools/plantdoc_to_yolo.py at build time, so the notebook and
-this PC always convert the dataset the same way.
-
-On Colab: File > Upload notebook > pick the .ipynb; Runtime > Change runtime type > T4 GPU;
-Runtime > Run all. At the end it downloads plant_yolov8_results.zip (best.pt + metrics).
-"""
 import json
 import os
 
@@ -25,11 +14,12 @@ def code(text):
             "source": text.strip("\n").splitlines(keepends=True)}
 
 
+# the notebook is generated so it never drifts from the converter script
 def main():
     converter = open(os.path.join(ROOT, "tools", "plantdoc_to_yolo.py"), encoding="utf-8").read()
     cells = [
         md("""
-# Train a plant-disease YOLOv8 (AR glasses project, Step 7.6)
+# Train a plant-disease YOLOv8 (AR glasses project)
 
 Trains YOLOv8 on **PlantDoc** (29 classes: corn, tomato, potato, apple, grape... leaves and diseases)
 so the AR backend can run it on its fast YOLOv8 C++ path (~150-400 ms instead of ~2 s).

@@ -3,20 +3,14 @@ package com.soufiane.ar.glasses
 import org.json.JSONObject
 import java.io.File
 
-/**
- * Step 8.9: the expected answers of a look-and-hold test video (made by tools/make_plant_videos.py):
- * for every hold, its time window and the disease on the leaf. The demo screen shows
- * "expected: ... ✓/✗" under each popup with it.
- */
 class Timeline(val holds: List<Hold>) {
     data class Hold(val startMs: Long, val endMs: Long, val expected: String)
 
-    /** The expected answer of the hold that contains [positionMs] (a little early counts: 100 ms). */
+    // a bit early still counts since the check starts right after the view stops
     fun expectedAt(positionMs: Long): String? =
         holds.firstOrNull { positionMs >= it.startMs - 100 && positionMs <= it.endMs }?.expected
 
     companion object {
-        /** `<video>.timeline.json` next to `<video>.mp4`; null if there is none or it is unreadable. */
         fun forVideo(video: File): Timeline? {
             val f = File(video.parentFile, video.name.removeSuffix(".mp4") + ".timeline.json")
             if (!f.isFile) return null
@@ -36,8 +30,7 @@ class Timeline(val holds: List<Hold>) {
             })
         }
 
-        /** "expected: Corn rust leaf ✓" - the line under the popup. */
         fun verdictLine(expected: String, said: String): String =
-            Lang.t("expected", Lang.label(expected)) + "  " + if (expected == said) "✓" else "✗"   // compare raw labels
+            Lang.t("expected", Lang.label(expected)) + "  " + if (expected == said) "✓" else "✗"
     }
 }

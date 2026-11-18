@@ -1,25 +1,3 @@
-"""
-Turning detections into alerts. Ported from soufiane-easy's rule engine (logic, not code).
-
-A frame at 8 fps with a cow in view produces 8 "cow" detections a second - every one true,
-none worth a new notification. This module is the reduction from "what the model saw" to
-"what a human should look at", and most of it is de-duplication. Three filters, in order:
-
-  0. label      the detection's label == rule.label, or CONTAINS it (rule.match = 'contains',
-                e.g. "blight" covers Corn leaf blight, Tomato leaf late blight, Potato leaf ...)
-  1. threshold  confidence >= rule.min_confidence     (is the model sure?)
-  2. quorum     at least rule.min_count in ONE frame  (is it significant?)
-  3. cooldown   nothing from this rule for this DEVICE in the last N seconds
-                (have we already said so?)
-
-Differences from soufiane-easy, on purpose:
-  - Cooldown is per (rule, device): two pairs of glasses seeing a cow are two events.
-  - Time = when the scheduler RECEIVED the frame, not when this code runs. After an outage the
-    consumer catches up on a backlog; using wall-clock time would then fire one alert for the
-    whole backlog instead of the alerts that should have fired as it happened.
-  - Alerts raised inside one batch count immediately for the frames after them in the same
-    batch, but only become "real" (cached) once the batch's transaction commits.
-"""
 import threading
 import time
 from dataclasses import dataclass
@@ -38,8 +16,9 @@ class Rule:
     id: int
     name: str
     label: str
-    match: str              # 'exact' or 'contains'
+    match: str
     min_confidence: float
+    # boxes of that label needed in one frame
     min_count: int
     cooldown_seconds: int
     severity: str
@@ -49,7 +28,6 @@ class Rule:
 
 @dataclass(frozen=True)
 class Hit:
-    """One detection, as the rule engine needs it."""
     label: str
     confidence: float
 
@@ -59,14 +37,12 @@ class RuleEngine:
         self.reload_seconds = reload_seconds
         self._rules: list[Rule] = []
         self._loaded_at = 0.0
-        self._last_fired: dict[tuple[int, str], datetime] = {}   # (rule_id, device) -> raised_at
-        self._pending: dict[tuple[int, str], datetime] = {}      # fired in the current batch
+        self._last_fired: dict[tuple[int, str], datetime] = {}
+        self._pending: dict[tuple[int, str], datetime] = {}
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------ rules
 
     def rules(self, conn) -> list[Rule]:
-        """Enabled rules, reloaded from the database every few seconds (the API edits them)."""
         if time.monotonic() - self._loaded_at >= self.reload_seconds:
             rows = conn.execute(select(alert_rule).where(alert_rule.c.enabled.is_(True))).mappings().all()
             self._rules = [Rule(**{k: r[k] for k in Rule.__dataclass_fields__}) for r in rows]
@@ -76,7 +52,6 @@ class RuleEngine:
     def force_reload(self):
         self._loaded_at = 0.0
 
-    # ------------------------------------------------------------------ batches
 
     def begin_batch(self):
         self._pending = {}
@@ -89,16 +64,13 @@ class RuleEngine:
     def rollback_batch(self):
         self._pending = {}
 
-    # ------------------------------------------------------------------ evaluation
 
     def evaluate(self, conn, device: str, received_at: datetime, session_id: str, frame_id: int,
                  hits: list[Hit]) -> list[dict]:
-        """Alerts this frame raises (as rows to insert). Call between begin_batch and commit_batch."""
         if not hits:
             return []
         by_label: dict[str, list[Hit]] = {}
         for h in hits:
-            # lowercase on both sides: rules are stored lowercased, model labels may not be
             by_label.setdefault(h.label.lower(), []).append(h)
 
         raised = []
@@ -118,13 +90,14 @@ class RuleEngine:
             top = max(candidates, key=lambda h: h.confidence)
             raised.append({
                 "rule_id": rule.id, "rule_name": rule.name, "device_id": device, "session_id": session_id,
-                # the label the model actually emitted (for 'contains' rules: e.g. "Tomato leaf late blight")
                 "frame_id": frame_id, "label": top.label if rule.match == "contains" else rule.label,
                 "count": len(candidates), "max_confidence": top.confidence, "severity": rule.severity,
                 "raised_at": received_at,
             })
         return raised
 
+    # time comes from when the scheduler recieved the frame not from now
+    # otherwise a backlog after an outage fires only one alert
     def _cooldown_expired(self, conn, rule: Rule, device: str, at: datetime) -> bool:
         key = (rule.id, device)
         last = self._pending.get(key)
@@ -132,8 +105,6 @@ class RuleEngine:
             with self._lock:
                 last = self._last_fired.get(key)
         if last is None:
-            # Cold cache (restart, or first frame for this pair): ask the alert table, otherwise
-            # every restart would re-announce everything currently in view.
             last = conn.execute(
                 select(func.max(alert.c.raised_at))
                 .where(alert.c.rule_id == rule.id, alert.c.device_id == device)

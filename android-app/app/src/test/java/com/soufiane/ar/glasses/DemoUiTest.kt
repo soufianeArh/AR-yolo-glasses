@@ -6,19 +6,19 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Step 8.9: demo list merge, expected answers, new settings. */
 class DemoUiTest {
 
     private fun demo(id: String, file: String, size: Long, onServer: Boolean = true) =
         DemoRepository.Demo(id, id, "corn", "inspect", file, size, hasTimeline = true, onServer = onServer, local = false)
 
     @Test
+    // a half downloaded file must be fetched again
     fun mergeMarksCompleteDownloadsAsLocal() {
         val remote = listOf(demo("a", "a.mp4", 100), demo("b", "b.mp4", 200), demo("gone", "g.mp4", 0, onServer = false))
         val merged = DemoRepository.merge(remote, mapOf("a.mp4" to 100L, "b.mp4" to 150L, "own.mp4" to 42L))
-        assertEquals(listOf("a", "b", "local:own.mp4"), merged.map { it.id })     // not on server, not here: hidden
+        assertEquals(listOf("a", "b", "local:own.mp4"), merged.map { it.id })
         assertTrue(merged[0].local)
-        assertFalse(merged[1].local)                                               // cut download: fetch again
+        assertFalse(merged[1].local)
         assertTrue(merged[2].local && !merged[2].onServer)
         assertEquals("own", merged[2].title)
     }
@@ -32,9 +32,9 @@ class DemoUiTest {
     @Test
     fun expectedAnswerByPosition() {
         val t = Timeline(listOf(Timeline.Hold(500, 6500, "Corn leaf blight"), Timeline.Hold(7700, 13700, "Corn rust leaf")))
-        assertEquals("Corn leaf blight", t.expectedAt(450))         // a little early still counts
+        assertEquals("Corn leaf blight", t.expectedAt(450))
         assertEquals("Corn leaf blight", t.expectedAt(6500))
-        assertNull(t.expectedAt(7000))                              // moving between leaves
+        assertNull(t.expectedAt(7000))
         assertEquals("Corn rust leaf", t.expectedAt(8125))
         assertEquals("expected: Corn rust leaf  ✓", Timeline.verdictLine("Corn rust leaf", "Corn rust leaf"))
         assertEquals("expected: Corn rust leaf  ✗", Timeline.verdictLine("Corn rust leaf", "Corn Gray leaf spot"))

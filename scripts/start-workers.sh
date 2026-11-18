@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# Start N C++ workers in the background (Linux / WSL).
-#
-#   bash scripts/start-workers.sh N THREADS [BASE_PORT] [SCHEDULER]
-#   bash scripts/start-workers.sh 2 3                 # 2 workers x 3 threads, ports 50061-50062
-#   bash scripts/stop-workers.sh                      # stop them
-#
-# Workers register themselves with the Java scheduler through their heartbeats,
-# so the scheduler can be started before or after them.
-# Logs: /tmp/ar-workers/worker-<i>.log   (override with AR_LOG_DIR)
 set -euo pipefail
 
 N=${1:?usage: start-workers.sh N THREADS [BASE_PORT] [SCHEDULER]}
@@ -20,6 +11,7 @@ BIN=${AR_BIN:-$HOME/ar-build/worker-cpp}
 LOG_DIR=${AR_LOG_DIR:-/tmp/ar-workers}
 mkdir -p "$LOG_DIR"
 
+# one worker per port
 for i in $(seq 1 "$N"); do
   port=$((BASE_PORT + i - 1))
   "$BIN/worker-server" --model "$ROOT/models/yolov8n.onnx" --port "$port" \

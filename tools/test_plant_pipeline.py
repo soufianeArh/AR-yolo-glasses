@@ -1,23 +1,3 @@
-r"""
-End-to-end test of Step 7: the plant-disease model through the whole backend.
-
-  fake client --model plant -> Java scheduler (plant deadline 2.5 s) -> plant worker -> back
-                                   \-> Redis Stream -> consumer -> Postgres -> API (alerts)
-
-Runs a plant worker AND a COCO worker side by side, with its own Redis (port 6390) and the
-test database (ar_test).
-
-  1. both workers register, each with its own model
-  2. routing: plant frames only on the plant worker, COCO frames only on the COCO worker;
-     plant results through the scheduler == worker-cli
-  3. per-model deadline: plant frames come back OK after more than 300 ms (COCO's deadline)
-  4. a "contains blight" rule (API) raises alerts for blighted leaves, not for a healthy one
-  5. look-and-hold videos: a frame from the middle of each hold gives the same answer as the
-     original photo (the video frames carry the disease)
-
-Usage (inside WSL, from the AR folder):
-  ~/ar-venv/bin/python tools/test_plant_pipeline.py
-"""
 import json
 import os
 import signal
@@ -48,8 +28,8 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
 
 
+# the same leaves through the whole chain and through the cli must match
 def send_images(model, files, resend=3):
-    """Send images one by one; a frame that missed its deadline (hot CPU) is resent."""
     out = subprocess.run([PY, CLIENT, "--target", f"127.0.0.1:{SCHED_PORT}", "--model", model, "images", *files],
                          capture_output=True, text=True, timeout=600).stdout
     got = [json.loads(l) for l in out.splitlines() if l.strip()]
@@ -93,7 +73,6 @@ def main():
         sys.exit("scheduler did not start:\n" + "\n".join(sched.lines))
     print("scheduler:", sched.lines[-1].split("] ")[-1][:110], "\n")
 
-    # 1 ----------------------------------------------------------------------------------
     print("1. a plant worker and a COCO worker register")
     plant = Proc([WORKER, "--model", PLANT_MODEL, "--name", "plant", "--port", str(PLANT_PORT),
                   "--worker-id", "plant-1", "--threads", "3", "--scheduler", f"127.0.0.1:{SCHED_PORT}"], "plant")
@@ -114,7 +93,6 @@ def main():
         sys.exit("API did not start")
     http = httpx.Client(base_url=f"http://127.0.0.1:{API_PORT}", timeout=10)
 
-    # 2 + 3 ------------------------------------------------------------------------------
     print("\n2. routing by model + plant results == worker-cli")
     plant_files = sorted(f"testdata/plant/{f}" for f in os.listdir("testdata/plant") if f.endswith(".png"))
     got = send_images("plant", plant_files)
@@ -133,19 +111,15 @@ def main():
 
     print("\n3. per-model deadline")
     slow_ok = [g["backend_ms"] for g in got if g["status"] == "OK"]
-    # The point: a plant frame taking 1.5-2.5 s is answered OK, where COCO's 300 ms would drop it.
-    # (backend_ms can end slightly above the deadline: it is measured when the scheduler sends the
-    # answer, and its callback can run late under heavy CPU load.)
     check("plant frames come back OK after > 300 ms (COCO's deadline would have dropped them)",
           bool(slow_ok) and min(slow_ok) > 300,
           f"backend {min(slow_ok)}-{max(slow_ok)} ms, plant deadline {PLANT_DEADLINE_MS} ms" if slow_ok else "none OK")
 
-    # 4 ----------------------------------------------------------------------------------
     print("\n4. 'contains blight' rule through the API")
     r = http.post("/rules", json={"name": "any-blight", "label": "blight", "match": "contains",
                                   "min_confidence": 0.5, "min_count": 1, "cooldown_seconds": 0, "severity": "high"})
     check("rule created", r.status_code == 201 and r.json()["match"] == "contains", r.text[:80])
-    time.sleep(1.5)                                          # consumer reloads rules every 1 s
+    time.sleep(1.5)
     before = len(http.get("/alerts").json())
     with engine.connect() as c:
         stored_before = c.execute(text("SELECT count(*) FROM frame")).scalar()
@@ -158,7 +132,6 @@ def main():
           labels == ["Corn leaf blight", "Potato leaf late blight"],
           f"alerts: {labels} (tomato blight is reported as 'Potato leaf late blight' by this model)")
 
-    # 5 ----------------------------------------------------------------------------------
     print("\n5. look-and-hold videos: mid-hold frame vs the original photo (MEASUREMENT: model stability)")
     agree = total = 0
     rows = []
@@ -183,15 +156,12 @@ def main():
             agree += a == b
             total += 1
             rows.append((os.path.basename(o), b, a, mid.get(p, {}).get("status", "?")))
-    # Not pass/fail: how stable the MODEL is when the same leaf is reframed, rescaled and
-    # video-compressed - exactly what happens between camera frames on the glasses.
     for name, b, a, st in rows:
         print(f"     {name[:34]:36} photo: {b[:28]:30} video frame: {a[:28]:30} {'same' if a == b else 'DIFFERENT'}")
     print(f"     measured: {agree}/{total} holds give the same top disease as the original photo")
     check("every mid-hold video frame was answered OK by the plant model",
           total > 0 and all(st == "OK" for *_, st in rows), f"{total} holds")
 
-    # shutdown -----------------------------------------------------------------------------
     stop(api.p, signal.SIGINT)
     stop(consumer.p, signal.SIGINT)
     for w in (plant, coco):

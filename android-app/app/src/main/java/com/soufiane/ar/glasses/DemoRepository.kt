@@ -6,30 +6,23 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Step 8.9: the demo videos. The catalog comes from the control plane's REST API (GET /demos on
- * the same host as the scheduler, port [AppSettings.apiPort]); a video is downloaded once into
- * the app's files folder, with its timeline, and played from there. Videos already in that folder
- * (adb push, Step 8.3) are listed too, so the list works offline as well.
- * Call everything off the UI thread.
- */
 class DemoRepository(private val dir: File, private val host: String, private val apiPort: Int) {
 
     data class Demo(
         val id: String, val title: String, val crop: String, val mode: String, val file: String,
         val sizeBytes: Long, val hasTimeline: Boolean,
-        val onServer: Boolean,        // the server can send it
-        val local: Boolean,           // already in the files folder (complete)
-        val titleZh: String = "",     // Chinese title from the catalog (empty = use [title])
+        val onServer: Boolean,
+        val local: Boolean,
+        val titleZh: String = "",
     ) {
         fun shownTitle() = if (Lang.current == "zh" && titleZh.isNotEmpty()) titleZh else title
     }
 
-    /** Result of [list]: the demos, and why the server part is missing (null = server answered). */
     data class Listing(val demos: List<Demo>, val serverError: String?)
 
     private val base get() = "http://$host:$apiPort"
 
+    // server down still lists the videos already on the device
     fun list(): Listing {
         val localFiles = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".mp4") }
             ?.associate { it.name to it.length() } ?: emptyMap()
@@ -42,20 +35,20 @@ class DemoRepository(private val dir: File, private val host: String, private va
         }
     }
 
-    /** Downloads the video (and timeline) unless already here; returns the local file. */
     fun fetch(d: Demo, onProgress: (Long, Long) -> Unit): File {
         val target = File(dir, d.file)
         val timelineFile = File(dir, d.file.removeSuffix(".mp4") + ".timeline.json")
-        if (d.local) {                                // video already here (download or adb push)
+        if (d.local) {
             if (d.hasTimeline && d.onServer && !timelineFile.isFile) {
                 try {
                     timelineFile.writeText(get("$base/demos/${d.id}/timeline"))
                 } catch (e: Exception) {
-                    Log.w(MainActivity.TAG, "DEMOS no timeline for ${d.id}: ${e.message}")   // plays without it
+                    Log.w(MainActivity.TAG, "DEMOS no timeline for ${d.id}: ${e.message}")
                 }
             }
             return target
         }
+        // download to a part file first so a cut download is never played
         val tmp = File(dir, d.file + ".part")
         val c = URL("$base/demos/${d.id}/video").openConnection() as HttpURLConnection
         c.connectTimeout = 3000
@@ -109,11 +102,7 @@ class DemoRepository(private val dir: File, private val host: String, private va
             }
         }
 
-        /**
-         * Server catalog + files already here. A server demo counts as local when a file with its name
-         * and its full size is here (a cut download does not). Files the server does not know are
-         * listed by file name, mode inspect.
-         */
+        // a cut download doesnt count as local
         fun merge(remote: List<Demo>, localFiles: Map<String, Long>): List<Demo> {
             val fromServer = remote.map { d ->
                 val size = localFiles[d.file]

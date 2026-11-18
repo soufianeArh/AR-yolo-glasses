@@ -17,20 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
-/**
- * Every C++ worker the scheduler knows about, built ONLY from heartbeats.
- *
- * A worker's first heartbeat registers it (address, models, threads) - nothing is configured
- * by hand. A worker that stops sending heartbeats for longer than the timeout is unhealthy
- * and gets no new frames; when its heartbeats come back, it is healthy again.
- *
- * Load = frames this scheduler has sent to a worker and not yet got an answer for. This is
- * accurate because the workers ABORT an inference when its deadline passes (Step 5): the
- * scheduler's count drops at the deadline at the same moment the worker stops computing.
- */
 final class WorkerRegistry implements AutoCloseable {
 
-    /** One C++ worker, as last reported by its heartbeat plus what this scheduler tracks. */
     static final class Worker {
         final String id;
         volatile String address;
@@ -39,11 +27,9 @@ final class WorkerRegistry implements AutoCloseable {
         volatile int reportedQueueDepth;
         volatile float avgInferMs;
         volatile long lastSeenNanos;
-        volatile boolean markedHealthy = true;   // last state we logged, for transition messages
+        volatile boolean markedHealthy = true;
 
-        /** Frames sent to the worker and not answered yet. Changed only through the registry. */
         final AtomicInteger inFlight = new AtomicInteger();
-        /** When this worker was last picked: the tie-break, so idle workers share the work. */
         long lastPickedNanos;
         final AtomicLong sent = new AtomicLong();
         final AtomicLong ok = new AtomicLong();
@@ -65,7 +51,7 @@ final class WorkerRegistry implements AutoCloseable {
         }
     }
 
-    /** How channels to workers are made. Tests replace it so no real connection is attempted. */
+    // tests plug fake channels in here
     interface ChannelFactory {
         ManagedChannel create(String address);
     }
@@ -74,8 +60,6 @@ final class WorkerRegistry implements AutoCloseable {
         ManagedChannel ch = Grpc.newChannelBuilder(address, InsecureChannelCredentials.create())
                 .maxInboundMessageSize(8 * 1024 * 1024)
                 .build();
-        // Connect NOW, not on the first frame. Otherwise the first frame pays the connection
-        // setup (~250 ms measured) and misses its deadline - and the frames behind it too.
         ch.getState(true);
         return ch;
     };
@@ -95,9 +79,6 @@ final class WorkerRegistry implements AutoCloseable {
         this.clock = clock;
     }
 
-    // ------------------------------------------------------------------ heartbeats
-
-    /** Called for every heartbeat. Registration and address changes are rare, so a lock is fine. */
     synchronized HeartbeatAck onHeartbeat(WorkerHeartbeat hb) {
         final long now = clock.getAsLong();
         final String id = hb.getWorkerId();
@@ -114,10 +95,8 @@ final class WorkerRegistry implements AutoCloseable {
                     + " threads=" + hb.getThreads());
         } else if (!w.address.equals(hb.getAddress())) {
             if (w.isHealthy(now, timeoutNanos)) {
-                // Two live processes claiming the same id: keep the first, reject the newcomer.
                 return HeartbeatAck.newBuilder().setAccepted(false).build();
             }
-            // The old one is gone; the id came back on a new address (restart on another port).
             Log.info("worker " + id + " moved " + w.address + " -> " + hb.getAddress());
             w.channel.shutdownNow();
             connect(w, hb.getAddress());
@@ -129,9 +108,6 @@ final class WorkerRegistry implements AutoCloseable {
         w.avgInferMs = hb.getAvgInferMs();
         w.lastSeenNanos = now;
 
-        // A heartbeat proves the worker is up. If our connection to it failed earlier (crash,
-        // restart), gRPC would wait out its reconnect back-off (1 s, growing up to minutes) and
-        // fail frames meanwhile. Skip the back-off and reconnect now.
         ConnectivityState state = w.channel.getState(false);
         if (state == ConnectivityState.TRANSIENT_FAILURE || state == ConnectivityState.IDLE) {
             w.channel.resetConnectBackoff();
@@ -151,16 +127,8 @@ final class WorkerRegistry implements AutoCloseable {
         w.stub = InferenceWorkerGrpc.newFutureStub(w.channel);
     }
 
-    // ------------------------------------------------------------------ scheduling
-
-    /**
-     * Picks a worker for one frame AND reserves it (its in-flight count goes up), atomically,
-     * so two frames arriving at the same moment can't both see the same idle worker.
-     *
-     * Policy: among the healthy workers that have the model (and are not excluded), the one with
-     * the fewest frames in flight; on a tie, the one picked longest ago (round robin among equals).
-     * Every reservation must be undone exactly once with {@link #release}.
-     */
+    // picks the least loaded worker and counts the frame right away
+    // so two sessions never grab the same last slot
     synchronized Optional<Worker> reserve(String model, Worker exclude) {
         final long now = clock.getAsLong();
         Worker best = null;
@@ -184,12 +152,7 @@ final class WorkerRegistry implements AutoCloseable {
         w.inFlight.decrementAndGet();
     }
 
-    /**
-     * A call to this worker failed with "unreachable": stop sending it frames NOW instead of
-     * waiting up to the heartbeat timeout. Its next heartbeat (if it is actually alive) makes it
-     * healthy again, so a false alarm costs at most one heartbeat interval (~1 s).
-     */
-    synchronized void suspend(Worker w, String reason) {
+    synchronized void suspend(Worker w,String reason) {
         final long now = clock.getAsLong();
         if (w.isHealthy(now, timeoutNanos)) {
             w.lastSeenNanos = now - timeoutNanos - 1;
@@ -198,7 +161,6 @@ final class WorkerRegistry implements AutoCloseable {
         }
     }
 
-    /** Logs health transitions. Called every second. */
     void sweep() {
         final long now = clock.getAsLong();
         for (Worker w : workers.values()) {

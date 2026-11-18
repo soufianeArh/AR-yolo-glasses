@@ -1,10 +1,3 @@
-// AR glasses Android app (Step 8). Built and tested on the Android emulator shaped like the glasses,
-// then installed on the Goolton glasses (WEBB OS, Android-based) in Step 9.
-//
-// Build (Windows, from AR/android-app), with Android Studio's bundled JDK 17:
-//   set JAVA_HOME=C:\Program Files\Android\Android Studio\jbr
-//   gradlew.bat assembleDebug
-// Versions match what is already installed (Android 14 platform, build-tools 34).
 plugins {
     id 'com.android.application' version '8.7.3' apply false
     id 'org.jetbrains.kotlin.android' version '2.0.21' apply false

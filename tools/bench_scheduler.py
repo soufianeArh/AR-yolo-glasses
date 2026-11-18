@@ -1,21 +1,3 @@
-"""
-Step 5 benchmark: throughput and latency vs (number of workers x threads per worker).
-
-For each configuration: start the Java scheduler and N C++ workers, warm up, then stream
-video from 1 and then 2 fake Android app sessions (8 fps each, max 2 frames in flight).
-
-The deadline is set LONG (1 s) on purpose: a 300 ms deadline would drop slow frames and hide
-the real latency. Instead, every latency is recorded and the report shows what share of frames
-WOULD meet 300 ms (and 400 ms).
-
-The CPU throttles as it heats, so every configuration runs twice: once in order, once in
-reverse order, with a cool-down between configurations.
-
-Output: bench/results.json, bench/summary.md, bench/throughput.png
-
-Usage (inside WSL, from the AR folder; takes ~9 minutes):
-  ~/ar-venv/bin/python tools/bench_scheduler.py [--seconds 15] [--repeats 2]
-"""
 import argparse
 import json
 import statistics
@@ -28,8 +10,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_scheduler import CLIENT, MODEL, PY, ROOT, SCHEDULER, WORKER, Proc  # noqa: E402
 
-CONFIGS = [(1, 4), (1, 6), (2, 2), (2, 3), (3, 2), (4, 1)]   # (workers, threads per worker)
-LOADS = [1, 2]                                                # concurrent sessions
+CONFIGS = [(1, 4), (1, 6), (2, 2), (2, 3), (3, 2), (4, 1)]
+LOADS = [1, 2]
 SCHED_PORT, BASE_PORT = 50651, 50661
 OUT = os.path.join(ROOT, "bench")
 
@@ -41,6 +23,7 @@ def pct(vals, p):
     return s[max(0, min(len(s) - 1, -(-p * len(s) // 100) - 1))]
 
 
+# each setup runs a few times and the median is kept
 def run_config(workers, threads, seconds):
     sched = Proc([SCHEDULER, "--port", str(SCHED_PORT), "--deadline-ms", "1000", "--report-seconds", "0",
                   "--session-max-in-flight", "2", "--redis", "none"], "scheduler")
@@ -62,7 +45,7 @@ def run_config(workers, threads, seconds):
         ps = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(n)]
         return [json.loads(p.communicate(timeout=secs + 120)[0]) for p in ps]
 
-    clients(1, 3, raw=False)   # warm-up: JVM JIT, connections, first inferences - not measured
+    clients(1, 3, raw=False)
 
     rows = []
     for load in LOADS:
@@ -118,10 +101,9 @@ def main():
         with open(os.path.join(OUT, "results.json"), "w") as f:
             json.dump(all_rows, f, indent=1)
 
-    # ---------------------------------------------------------------- summary: median over repeats
     def med(vals):
         vals = [v for v in vals if v is not None]
-        return round(statistics.median(vals), 1) if vals else None   # 2 repeats -> their average
+        return round(statistics.median(vals), 1) if vals else None
 
     summary = []
     for workers, threads in CONFIGS:
@@ -139,10 +121,9 @@ def main():
                      f"{s['p95']} ({s['p95_range']}) | {s['p99']} | {s['under_300']}% | {s['under_400']}% |")
     table = "\n".join(lines)
     with open(os.path.join(OUT, "summary.md"), "w") as f:
-        f.write("# Step 5 benchmark (median of repeats)\n\n" + table + "\n")
+        f.write("# scheduler benchmark (median of repeats)\n\n" + table + "\n")
     print("\n" + table)
 
-    # ---------------------------------------------------------------- graph
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

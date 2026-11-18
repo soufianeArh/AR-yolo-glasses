@@ -8,18 +8,6 @@ import android.util.Log
 import android.view.View
 import android.widget.TextView
 
-/**
- * Step 8.5: the popup the wearer sees, top-right of a black (= see-through) screen.
- *
- * - [show] fades it in, keeps it [holdMs], then fades it out.
- * - No flickering: showing the SAME key again while it is visible only extends the timer (no new
- *   fade-in); a different key replaces the text in place.
- * - Black fill + coloured border: on optical glasses black is transparent, so only the border and
- *   the text are visible, over the real plant.
- *
- * Logcat (tag ARGlasses): POPUP_SHOW / POPUP_EXTEND / POPUP_HIDE with times, for tests.
- * Call everything on the UI thread.
- */
 class Popup(
     private val view: TextView,
     private val holdMs: Long = 3000,
@@ -41,6 +29,7 @@ class Popup(
         handler.removeCallbacks(hide)
         val visible = this.key != null
         when {
+            // same answer again only extends it so nothing flickers
             visible && key == this.key && !fading -> {
                 Log.i(MainActivity.TAG, "POPUP_EXTEND key=$key")
             }
@@ -65,11 +54,12 @@ class Popup(
         handler.postDelayed(hide, holdMs)
     }
 
+    // if the same key comes back during the fade it shows again
     private fun fadeOut() {
         val k = key ?: return
         fading = true
         view.animate().alpha(0f).setDuration(fadeOutMs).withEndAction {
-            if (key == k && fading) {                                // not shown again meanwhile
+            if (key == k && fading) {
                 view.visibility = View.INVISIBLE
                 Log.i(MainActivity.TAG, "POPUP_HIDE key=$k shown_ms=${SystemClock.elapsedRealtime() - shownAt}")
                 key = null

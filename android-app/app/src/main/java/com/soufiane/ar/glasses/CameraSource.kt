@@ -16,15 +16,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Size
 
-/**
- * Step 8.7: the device camera as the frame source. On the emulator the back camera is the PC
- * webcam (AVD: hw.camera.back = webcam0); on the glasses it will be their camera (Step 9 may need
- * a Goolton-specific source if WEBB OS does not expose it through Camera2).
- *
- * Plain Camera2 (no extra library): a repeating request into an ImageReader that delivers small
- * JPEGs; frames beyond [fps] are dropped right away (newest wins, no queue). Position = ms since start.
- * Needs the CAMERA permission (MainActivity asks for it).
- */
 class CameraSource(private val context: Context, private val maxWidth: Int = 640) : FrameSource {
 
     private var thread: HandlerThread? = null
@@ -38,16 +29,18 @@ class CameraSource(private val context: Context, private val maxWidth: Int = 640
     override val description: String
         get() = "camera $cameraId ${size?.let { "${it.width}x${it.height}" } ?: ""}"
 
-    @SuppressLint("MissingPermission")                                // checked by MainActivity
+    @SuppressLint("MissingPermission")
     override fun start(fps: Double, onFrame: (android.graphics.Bitmap, Long) -> Unit) {
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val ids = manager.cameraIdList
         if (ids.isEmpty()) error("no camera on this device")
+        // back camera first wich is the pc webcam on the emulator
         cameraId = ids.firstOrNull {
             manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
         } ?: ids[0]
         val map = manager.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
         val sizes = map.getOutputSizes(ImageFormat.JPEG).sortedBy { it.width * it.height }
+        // biggest jpeg size that still fits 640 wide
         val chosen = sizes.lastOrNull { it.width <= maxWidth } ?: sizes.first()
         size = chosen
 
@@ -64,7 +57,8 @@ class CameraSource(private val context: Context, private val maxWidth: Int = 640
         r.setOnImageAvailableListener({ rd ->
             val img = rd.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = SystemClock.elapsedRealtime()
-            if (!running || now - lastAt < periodMs) {                      // over the fps: drop
+            // more frames than we need just get dropped here
+            if (!running || now - lastAt < periodMs) {
                 img.close(); return@setOnImageAvailableListener
             }
             lastAt = now

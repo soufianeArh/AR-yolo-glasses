@@ -1,18 +1,3 @@
-"""
-Compare the C++ worker (worker-cli) against Ultralytics on the same images.
-
-Both run the SAME yolov8n.onnx with the same thresholds, so any difference comes from
-the C++ pre-/post-processing (letterbox, decode, NMS, box mapping) - which is what
-this checks.
-
-Pass criteria (Step 2 in ROADMAP.md), per image:
-  - same number of detections, same labels
-  - confidence within +-0.01
-  - box corners within 2 px (in original image pixels)
-
-Usage (from the AR folder):
-  tools/.venv/Scripts/python tools/compare.py [--conf 0.4] [--iou 0.5]
-"""
 import argparse
 import glob
 import json
@@ -26,7 +11,7 @@ from ultralytics import YOLO
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(ROOT, "models", "yolov8n.onnx")
 CLI = os.path.join(ROOT, "worker-cpp", "build", "Release", "worker-cli.exe")
-if not os.path.exists(CLI):  # Linux build
+if not os.path.exists(CLI):
     CLI = os.path.join(ROOT, "worker-cpp", "build", "worker-cli")
 
 CONF_TOL = 0.01
@@ -54,8 +39,6 @@ def wsl_path(win_path):
 
 def cpp_results(images, conf, iou, wsl=False):
     if wsl:
-        # Linux build inside WSL Ubuntu (see worker-cpp/CMakeLists.txt). Image paths are
-        # relative to the AR folder, so they work unchanged on both sides.
         home = subprocess.run(["wsl", "-d", "Ubuntu", "--exec", "printenv", "HOME"],
                               capture_output=True, text=True, check=True).stdout.strip()
         cmd = ["wsl", "-d", "Ubuntu", "--cd", wsl_path(ROOT), "--exec", f"{home}/ar-build/worker-cpp/worker-cli",
@@ -66,8 +49,8 @@ def cpp_results(images, conf, iou, wsl=False):
     return {json.loads(line)["file"]: json.loads(line) for line in lines if line.strip()}
 
 
+# match boxes by label and overlap before comparing them
 def pair(a, b, w, h):
-    """Greedily pair detections with the same label by smallest box distance."""
     pairs, used = [], set()
     for da in sorted(a, key=lambda d: -d["confidence"]):
         best, best_dist = None, None

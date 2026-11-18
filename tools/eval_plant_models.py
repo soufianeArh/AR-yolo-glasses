@@ -1,19 +1,3 @@
-"""
-Step 7.6: compare plant-disease models, as the C++ worker runs them.
-
-  tools/.venv/Scripts/python tools/eval_plant_models.py --new models/plant-yolov8.pt
-
-  --new <.pt or .onnx>   the YOLOv8 trained on Colab (best.pt is exported to ONNX first,
-                         fixed 640x640 like the COCO model)
-  --old <.onnx>          the current model (default models/plant.onnx, YOLOS from soufiane-easy)
-
-For each model, through worker-cli / worker-bench (Linux build in WSL):
-  1. ACCURACY   top detection == expected disease, on the 44 labelled test leaves
-                (testdata/plant/expected.json, PlantDoc TEST + soufiane-easy samples)
-  2. STABILITY  top disease on a mid-hold frame of the look-and-hold videos == on the original photo
-  3. SPEED      inference time, 3 threads (the plant worker setup)
-Writes bench/plant_models.json.
-"""
 import argparse
 import glob
 import json
@@ -62,11 +46,12 @@ def top_labels(model, conf, files):
     return res
 
 
+# timed with the c++ cli so it matches the real worker
 def speed(model, image):
     out = wsl("~/ar-build/worker-cpp/worker-bench", "--model", model, "--image", image, "--threads", "3",
               "--iters", "8", "--warmup", "2")
     row = [l for l in out.splitlines() if l.startswith("| 3 |")][0].split("|")
-    return float(re.findall(r"[\d.]+", row[4])[0]), float(re.findall(r"[\d.]+", row[5])[0])   # infer avg, p95
+    return float(re.findall(r"[\d.]+", row[4])[0]), float(re.findall(r"[\d.]+", row[5])[0])
 
 
 def main():
@@ -81,7 +66,6 @@ def main():
     manifest = json.load(open("testdata/plant/expected.json"))
     files = sorted(f for f, v in manifest.items() if not v["expected"].startswith("healthy corn"))
 
-    # mid-hold frames of the look-and-hold videos, and the photo each one shows
     os.makedirs("runs/eval-holds", exist_ok=True)
     holds = []
     for tl in sorted(glob.glob("testdata/plant/videos/*.timeline.json")):

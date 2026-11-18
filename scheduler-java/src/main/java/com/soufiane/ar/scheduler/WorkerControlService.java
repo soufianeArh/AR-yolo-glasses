@@ -5,7 +5,6 @@ import com.soufiane.ar.proto.v1.WorkerControlGrpc;
 import com.soufiane.ar.proto.v1.WorkerHeartbeat;
 import io.grpc.stub.StreamObserver;
 
-/** C++ worker -> Java scheduler: one heartbeat per second per worker. */
 final class WorkerControlService extends WorkerControlGrpc.WorkerControlImplBase {
     private final WorkerRegistry registry;
 
@@ -14,6 +13,7 @@ final class WorkerControlService extends WorkerControlGrpc.WorkerControlImplBase
     }
 
     @Override
+    // a heartbeat registers a new worker and keeps a known one alive
     public void heartbeat(WorkerHeartbeat request, StreamObserver<HeartbeatAck> response) {
         response.onNext(registry.onHeartbeat(request));
         response.onCompleted();
