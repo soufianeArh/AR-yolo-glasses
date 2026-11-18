@@ -607,6 +607,13 @@ identical**; consumer lag 0; **4 alerts from 10 diseased frames**, each suppress
 - Restart only the REST API (e.g. after adding a route): run `pkill -f 'uvicorn ar_control.api'`
   from a script FILE, then start uvicorn again; an API started that way is not in
   `/tmp/ar-backend/pids`, so `stop-backend.sh` does not stop it.
+- **Settings usability (after 8.9):** in landscape Android opened the keyboard as a FULL-SCREEN editor
+  that hid the whole settings screen (no visible way back) → `IME_FLAG_NO_EXTRACT_UI` + `NO_FULLSCREEN`;
+  Cancel / Save moved to a fixed top bar (never under the keyboard, no scrolling); keyboard "Done" or a
+  tap outside a field closes it; Cancel or Back leaves without saving (nothing applies before Save).
+- **Emulator navigation:** 3-button bar (◁ ○ □) instead of gestures, so Back is one click:
+  `adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton`
+  (kept in the emulator's user data). PC keyboard: Ctrl+Backspace = Back.
 - Never `pkill -f <name>` inside a `bash -c '...<name>...'` command: it matches its own shell and kills it.
 - Restart only the scheduler (workers keep running and re-register):
   `pkill -f scheduler-java`, then start `scheduler-java` again with the same options.

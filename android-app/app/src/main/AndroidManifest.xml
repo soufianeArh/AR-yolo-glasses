@@ -45,7 +45,7 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:screenOrientation="landscape"
-            android:theme="@android:style/Theme.Material"
+            android:theme="@android:style/Theme.Material.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

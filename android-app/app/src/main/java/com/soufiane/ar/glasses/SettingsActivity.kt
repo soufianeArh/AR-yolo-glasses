@@ -1,12 +1,19 @@
 package com.soufiane.ar.glasses
 
 import android.app.Activity
+import android.graphics.Color
+import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
 import android.util.Log
 import android.util.TypedValue
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -21,6 +28,10 @@ import android.widget.TextView
  * Step 8.6: the settings screen. Opened from the main screen with a long-press (glasses touchpad)
  * or the menu key; Save writes [AppSettings] and returns - the main screen restarts with them.
  * Built in code (no XML): a short list of fields.
+ *
+ * Save / Cancel sit in a fixed bar at the TOP: always visible, never under the keyboard, reachable
+ * without scrolling (also with keys on the glasses). Nothing is applied before Save: Cancel or Back
+ * leaves without changes. Keyboard "Done", or a tap outside a field, closes the keyboard.
  */
 class SettingsActivity : Activity() {
 
@@ -56,11 +67,6 @@ class SettingsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 32, 48, 32)
         }
-        form.addView(TextView(this).apply {
-            text = Lang.t("settings_title")
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-            setPadding(0, 0, 0, 24)
-        })
         language = spinner(form, Lang.t("f_language"), Lang.NAMES, Lang.NAMES[Lang.CODES.indexOf(s.language).coerceAtLeast(0)])
         host = edit(form, Lang.t("f_host"), s.host, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         port = edit(form, Lang.t("f_port"), s.port.toString(), InputType.TYPE_CLASS_NUMBER)
@@ -96,22 +102,31 @@ class SettingsActivity : Activity() {
         }
         form.addView(debug)
 
-        val buttons = LinearLayout(this).apply {
+        // Fixed top bar: title, Cancel, Save.
+        val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 24, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(48, 16, 32, 16)
+            setBackgroundColor(Color.rgb(28, 28, 28))
         }
-        buttons.addView(Button(this).apply {
-            text = Lang.t("btn_save")
-            contentDescription = "save"
-            setOnClickListener { save(prefs, s) }
-        })
-        buttons.addView(Button(this).apply {
-            text = Lang.t("btn_cancel")
-            setOnClickListener { finish() }
-        })
-        form.addView(buttons)
+        top.addView(TextView(this).apply {
+            text = Lang.t("settings_title")
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        top.addView(barButton("✕  " + Lang.t("btn_cancel"), Color.rgb(200, 200, 200)) {
+            Log.i(MainActivity.TAG, "SETTINGS_CANCELLED")
+            finish()
+        }.apply { contentDescription = "cancel" })
+        top.addView(barButton("✓  " + Lang.t("btn_save"), Color.rgb(120, 255, 120)) { save(prefs, s) }
+            .apply { contentDescription = "save" })
 
-        setContentView(ScrollView(this).apply { addView(form) })
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(top)
+            addView(ScrollView(this@SettingsActivity).apply { addView(form) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        })
     }
 
     private fun save(prefs: android.content.SharedPreferences, old: AppSettings) {
@@ -138,6 +153,38 @@ class SettingsActivity : Activity() {
         finish()
     }
 
+    private fun barButton(label: String, color: Int, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        setTextColor(color)
+        background = GradientDrawable().apply { setColor(Color.rgb(45, 45, 45)); setStroke(2, color); cornerRadius = 20f }
+        setOnFocusChangeListener { v, has ->                          // visible focus for the glasses' keys
+            (v.background as GradientDrawable).setColor(if (has) Color.rgb(90, 90, 90) else Color.rgb(45, 45, 45))
+        }
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { setMargins(16, 0, 0, 0) }
+    }
+
+    private fun hideKeyboard(v: View) {
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+        v.clearFocus()
+    }
+
+    /** A tap outside the field being edited closes the keyboard. */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.action == MotionEvent.ACTION_DOWN) {
+            val f = currentFocus
+            if (f is EditText) {
+                val r = Rect()
+                f.getGlobalVisibleRect(r)
+                if (!r.contains(ev.rawX.toInt(), ev.rawY.toInt())) hideKeyboard(f)
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     private fun label(form: LinearLayout, text: String) {
         form.addView(TextView(this).apply {
             this.text = text
@@ -152,6 +199,12 @@ class SettingsActivity : Activity() {
             setText(value)
             inputType = type
             isSingleLine = true
+            // "Done" closes the keyboard. NO full-screen keyboard: in landscape Android otherwise shows a
+            // full-screen editor that hides the whole settings screen (Cancel / Save included).
+            imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
+            setOnEditorActionListener { v, action, _ ->
+                if (action == EditorInfo.IME_ACTION_DONE) { hideKeyboard(v); true } else false
+            }
             contentDescription = title
             form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
