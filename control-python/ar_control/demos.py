@@ -54,7 +54,8 @@ def list_demos():
     for d in _load():
         video = _file(d.get("video"))
         out.append({
-            "id": d["id"], "title": d["title"], "crop": d.get("crop", "-"), "mode": d.get("mode", "inspect"),
+            "id": d["id"], "title": d["title"], "title_zh": d.get("title_zh", ""),
+            "crop": d.get("crop", "-"), "mode": d.get("mode", "inspect"),
             "file": os.path.basename(d["video"]),
             "size_bytes": os.path.getsize(video) if video else 0,
             "has_timeline": _file(d.get("timeline")) is not None,

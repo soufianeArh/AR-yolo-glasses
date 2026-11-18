@@ -73,7 +73,7 @@ class DebugView(context: Context) : View(context) {
         if (boxes) result?.detectionsList?.forEach { d ->
             val r = RectF(dst.left + d.x1 * w, dst.top + d.y1 * h, dst.left + d.x2 * w, dst.top + d.y2 * h)
             canvas.drawRect(r, boxPaint)
-            val text = "${d.label} ${"%.2f".format(d.confidence)}"
+            val text = "${Lang.label(d.label)} ${PopupRules.f2(d.confidence)}"
             val tw = labelPaint.measureText(text)
             // Label above the box; inside it when the box touches the top (it would be cut off).
             val top = if (r.top - 34f < 0f) r.top else r.top - 34f

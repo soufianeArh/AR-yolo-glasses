@@ -39,6 +39,8 @@ data class AppSettings(
     val showCamera: Boolean = true,
     /** Draw the detection boxes (+ label, confidence) on the shown image. */
     val showBoxes: Boolean = true,
+    /** UI language: "en" or "zh" (Lang). */
+    val language: String = "en",
 ) {
     fun minConfFor(model: String): Float = if (minConf >= 0f) minConf else MIN_CONFIDENCE[model] ?: 0.5f
 
@@ -56,6 +58,7 @@ data class AppSettings(
             minConf = if (minConf < 0f) -1f else minConf.coerceAtMost(1f),
             apiPort = apiPort.takeIf { it in 1..65535 } ?: d.apiPort,
             startScreen = startScreen.takeIf { it in START_SCREENS } ?: d.startScreen,
+            language = language.takeIf { it in Lang.CODES } ?: d.language,
         )
     }
 
@@ -63,7 +66,7 @@ data class AppSettings(
     fun describe() = "host=$host port=$port source=$source mode=$mode model=$model fps=$fps votes=$votes " +
         "debug=$debug minconf=${if (minConf < 0f) "per-model" else minConf} " +
         "popup_classes=${if (popupClasses.isEmpty()) "all" else popupClasses.sorted().joinToString(",")} " +
-        "crops=${if (crops.isEmpty()) "any" else crops.sorted().joinToString(",")} api_port=$apiPort start_screen=$startScreen show_camera=$showCamera show_boxes=$showBoxes"
+        "crops=${if (crops.isEmpty()) "any" else crops.sorted().joinToString(",")} api_port=$apiPort start_screen=$startScreen show_camera=$showCamera show_boxes=$showBoxes language=$language"
 
     fun save(prefs: SharedPreferences) {
         prefs.edit()
@@ -74,6 +77,7 @@ data class AppSettings(
             .putString("crops", crops.sorted().joinToString(","))
             .putInt("api_port", apiPort).putString("start_screen", startScreen).putBoolean("show_camera", showCamera)
             .putBoolean("show_boxes", showBoxes)
+            .putString("language", language)
             .apply()
     }
 
@@ -96,6 +100,7 @@ data class AppSettings(
             startScreen = e.getString("start_screen") ?: startScreen,
             showCamera = if (e.containsKey("show_camera")) e.getBoolean("show_camera", showCamera) else showCamera,
             showBoxes = if (e.containsKey("show_boxes")) e.getBoolean("show_boxes", showBoxes) else showBoxes,
+            language = e.getString("language") ?: language,
         ).validated()
         return s to changedKeys(this, s)
     }
@@ -127,6 +132,7 @@ data class AppSettings(
                 startScreen = prefs.getString("start_screen", d.startScreen) ?: d.startScreen,
                 showCamera = prefs.getBoolean("show_camera", d.showCamera),
                 showBoxes = prefs.getBoolean("show_boxes", d.showBoxes),
+                language = prefs.getString("language", d.language) ?: d.language,
             ).validated()
         }
 
@@ -144,6 +150,7 @@ data class AppSettings(
             if (a.apiPort != b.apiPort) add("api_port"); if (a.startScreen != b.startScreen) add("start_screen")
             if (a.showCamera != b.showCamera) add("show_camera")
             if (a.showBoxes != b.showBoxes) add("show_boxes")
+            if (a.language != b.language) add("language")
         }
     }
 }

@@ -27,7 +27,7 @@ def test_list(demos):
     r = demos.get("/demos").json()
     assert [d["id"] for d in r] == ["a", "b"]
     a, b = r
-    assert a == {"id": "a", "title": "Demo A", "crop": "corn", "mode": "inspect", "file": "a.mp4",
+    assert a == {"id": "a", "title": "Demo A", "title_zh": "", "crop": "corn", "mode": "inspect", "file": "a.mp4",
                  "size_bytes": 1012, "has_timeline": True, "available": True}
     assert b["available"] is False and b["size_bytes"] == 0 and b["has_timeline"] is False
 

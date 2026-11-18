@@ -39,6 +39,7 @@ class DemoListActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val s = AppSettings.load(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE))
+        Lang.current = s.language
         dir = getExternalFilesDir(null)!!
         repo = DemoRepository(dir, s.host, s.apiPort)
 
@@ -48,12 +49,12 @@ class DemoListActivity : Activity() {
             setPadding(48, 32, 48, 16)
         }
         col.addView(TextView(this).apply {
-            text = "Demo videos"
+            text = Lang.t("demos_title")
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
             setTextColor(Color.WHITE)
         })
         header = TextView(this).apply {
-            text = "loading the list..."
+            text = Lang.t("demos_loading")
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(Color.rgb(170, 170, 170))
             setPadding(0, 6, 0, 16)
@@ -84,9 +85,8 @@ class DemoListActivity : Activity() {
         runOnUiThread {
             demos = l.demos
             header.text = when {
-                l.serverError != null -> "Demo server not reachable - showing the videos already on this device. " +
-                    "(${l.serverError})"
-                else -> "Pick a video: it plays as if it were the camera, and the glasses inspect it."
+                l.serverError != null -> Lang.t("demos_server_down", l.serverError)
+                else -> Lang.t("demos_pick")
             }
             (list.adapter as BaseAdapter).notifyDataSetChanged()
             list.requestFocus()
@@ -125,18 +125,18 @@ class DemoListActivity : Activity() {
                     val pct = if (total > 0) (done * 100 / total).toInt() else -1
                     if (pct != lastPct) {
                         lastPct = pct
-                        runOnUiThread { header.text = "downloading ${d.title}: $pct% of ${total / 1_000_000} MB" }
+                        runOnUiThread { header.text = Lang.t("downloading", d.shownTitle(), pct, total / 1_000_000) }
                     }
                 }
                 thumbnail(d.copy(local = true))
                 runOnUiThread {
-                    header.text = "starting ${d.title}..."
+                    header.text = Lang.t("starting", d.shownTitle())
                     startActivity(Intent(this, MainActivity::class.java)
-                        .putExtra("source", "video:${file.name}").putExtra("mode", d.mode).putExtra("title", d.title))
+                        .putExtra("source", "video:${file.name}").putExtra("mode", d.mode).putExtra("title", d.title).putExtra("title_zh", d.titleZh))
                 }
             } catch (e: Exception) {
                 Log.e(MainActivity.TAG, "DEMO_ERROR id=${d.id} ${e.javaClass.simpleName}: ${e.message}")
-                runOnUiThread { header.text = "could not get ${d.title}: ${e.message}" }
+                runOnUiThread { header.text = Lang.t("could_not_get", d.shownTitle(), e.message) }
             } finally {
                 busy = false
             }
@@ -164,15 +164,16 @@ class DemoListActivity : Activity() {
                 setPadding(28, 0, 0, 0)
             }
             texts.addView(TextView(this@DemoListActivity).apply {
-                text = d.title
+                text = d.shownTitle()
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                 setTextColor(Color.WHITE)
             })
             val secs = durations[d.file]?.let { " · ${it / 1000} s" } ?: ""
-            val where = if (d.local) "on this device" else "tap to download (${"%.1f".format(d.sizeBytes / 1e6)} MB)"
+            val where = if (d.local) Lang.t("on_device") else Lang.t("tap_download", String.format(java.util.Locale.US, "%.1f", d.sizeBytes / 1e6))
             texts.addView(TextView(this@DemoListActivity).apply {
-                text = "${if (d.crop == "-") "objects" else d.crop} · ${if (d.mode == "inspect") "plant inspection" else "object stream"}$secs · $where" +
-                    if (d.hasTimeline) " · shows the expected answers" else ""
+                val crop = when (d.crop) { "-" -> Lang.t("objects"); "other" -> Lang.t("other"); else -> Lang.label(d.crop) }
+                text = "$crop · ${Lang.t(if (d.mode == "inspect") "plant_inspection" else "object_stream")}$secs · $where" +
+                    if (d.hasTimeline) " · " + Lang.t("shows_expected") else ""
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(if (d.local) Color.rgb(120, 255, 120) else Color.rgb(255, 200, 90))
             })

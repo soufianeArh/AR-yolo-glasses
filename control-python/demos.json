@@ -1,24 +1,13 @@
 {
   "_comment": "Step 8.9: demo videos the Android app can list and download (GET /demos). Paths are relative to AR_DEMO_ROOT (default: the repo root). mode: inspect = plant look-and-hold, stream = every frame (COCO). timeline: optional, the expected answer per hold.",
   "demos": [
-    {"id": "corn-look-and-hold", "title": "Corn leaves - look and hold", "crop": "corn", "mode": "inspect",
-     "video": "testdata/plant/videos/corn-look-and-hold-6s.mp4",
-     "timeline": "testdata/plant/videos/corn-look-and-hold-6s.timeline.json"},
-    {"id": "tomato-look-and-hold", "title": "Tomato leaves - look and hold", "crop": "tomato", "mode": "inspect",
-     "video": "testdata/plant/videos/tomato-look-and-hold-6s.mp4",
-     "timeline": "testdata/plant/videos/tomato-look-and-hold-6s.timeline.json"},
-    {"id": "potato-look-and-hold", "title": "Potato leaves - look and hold", "crop": "potato", "mode": "inspect",
-     "video": "testdata/plant/videos/potato-look-and-hold-6s.mp4",
-     "timeline": "testdata/plant/videos/potato-look-and-hold-6s.timeline.json"},
-    {"id": "field-corn", "title": "Corn field (real footage, healthy)", "crop": "corn", "mode": "inspect",
-     "video": "testdata/field/corn-crops-5283418.mp4"},
-    {"id": "field-tomato", "title": "Tomato plant (real footage, healthy)", "crop": "tomato", "mode": "inspect",
-     "video": "testdata/field/tomato-vine-3650329.mp4"},
-    {"id": "field-ornamental", "title": "Ornamental plant (real footage, not a crop)", "crop": "other", "mode": "inspect",
-     "video": "testdata/field/mildew-4069566.mp4"},
-    {"id": "people-and-cows", "title": "People walking among cows (objects)", "crop": "-", "mode": "stream",
-     "video": "testdata/moving/couple-walking-among-cows-41565.mp4"},
-    {"id": "calves", "title": "Calves in a meadow (objects)", "crop": "-", "mode": "stream",
-     "video": "testdata/moving/calves-feeding-meadow-41404.mp4"}
+    {"id": "corn-look-and-hold", "title": "Corn leaves - look and hold", "crop": "corn", "mode": "inspect", "video": "testdata/plant/videos/corn-look-and-hold-6s.mp4", "timeline": "testdata/plant/videos/corn-look-and-hold-6s.timeline.json", "title_zh": "玉米叶片 - 注视检测"},
+    {"id": "tomato-look-and-hold", "title": "Tomato leaves - look and hold", "crop": "tomato", "mode": "inspect", "video": "testdata/plant/videos/tomato-look-and-hold-6s.mp4", "timeline": "testdata/plant/videos/tomato-look-and-hold-6s.timeline.json", "title_zh": "番茄叶片 - 注视检测"},
+    {"id": "potato-look-and-hold", "title": "Potato leaves - look and hold", "crop": "potato", "mode": "inspect", "video": "testdata/plant/videos/potato-look-and-hold-6s.mp4", "timeline": "testdata/plant/videos/potato-look-and-hold-6s.timeline.json", "title_zh": "马铃薯叶片 - 注视检测"},
+    {"id": "field-corn", "title": "Corn field (real footage, healthy)", "crop": "corn", "mode": "inspect", "video": "testdata/field/corn-crops-5283418.mp4", "title_zh": "玉米田（实拍，健康）"},
+    {"id": "field-tomato", "title": "Tomato plant (real footage, healthy)", "crop": "tomato", "mode": "inspect", "video": "testdata/field/tomato-vine-3650329.mp4", "title_zh": "番茄植株（实拍，健康）"},
+    {"id": "field-ornamental", "title": "Ornamental plant (real footage, not a crop)", "crop": "other", "mode": "inspect", "video": "testdata/field/mildew-4069566.mp4", "title_zh": "观赏植物（实拍，非作物）"},
+    {"id": "people-and-cows", "title": "People walking among cows (objects)", "crop": "-", "mode": "stream", "video": "testdata/moving/couple-walking-among-cows-41565.mp4", "title_zh": "人在牛群中行走（物体）"},
+    {"id": "calves", "title": "Calves in a meadow (objects)", "crop": "-", "mode": "stream", "video": "testdata/moving/calves-feeding-meadow-41404.mp4", "title_zh": "草地上的小牛（物体）"}
   ]
 }

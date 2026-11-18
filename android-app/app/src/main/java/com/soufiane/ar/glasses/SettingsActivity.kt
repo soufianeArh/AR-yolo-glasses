@@ -39,12 +39,14 @@ class SettingsActivity : Activity() {
     private lateinit var debug: CheckBox
     private lateinit var showCamera: CheckBox
     private lateinit var showBoxes: CheckBox
+    private lateinit var language: Spinner
     private lateinit var sources: List<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
         val s = AppSettings.load(prefs)
+        Lang.current = s.language
 
         val videos = getExternalFilesDir(null)?.listFiles()?.filter { it.isFile && it.name.endsWith(".mp4") }
             ?.map { "video:${it.name}" }?.sorted() ?: emptyList()
@@ -55,39 +57,40 @@ class SettingsActivity : Activity() {
             setPadding(48, 32, 48, 32)
         }
         form.addView(TextView(this).apply {
-            text = "AR Plant Inspector - settings"
+            text = Lang.t("settings_title")
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
             setPadding(0, 0, 0, 24)
         })
-        host = edit(form, "Server (Java scheduler) address", s.host, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        port = edit(form, "Server port", s.port.toString(), InputType.TYPE_CLASS_NUMBER)
-        apiPort = edit(form, "Demo videos: control plane API port (same address)", s.apiPort.toString(), InputType.TYPE_CLASS_NUMBER)
-        startScreen = spinner(form, "App opens on: welcome = entry screen, inspect = straight into inspection (glasses)",
+        language = spinner(form, Lang.t("f_language"), Lang.NAMES, Lang.NAMES[Lang.CODES.indexOf(s.language).coerceAtLeast(0)])
+        host = edit(form, Lang.t("f_host"), s.host, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        port = edit(form, Lang.t("f_port"), s.port.toString(), InputType.TYPE_CLASS_NUMBER)
+        apiPort = edit(form, Lang.t("f_api_port"), s.apiPort.toString(), InputType.TYPE_CLASS_NUMBER)
+        startScreen = spinner(form, Lang.t("f_start_screen"),
             AppSettings.START_SCREENS, s.startScreen)
-        source = spinner(form, "Camera source (or pick a video on the Demo videos screen)", sources, s.source)
-        mode = spinner(form, "Mode: inspect = plant look-and-hold, stream = every frame", AppSettings.MODES, s.mode)
-        model = spinner(form, "Stream mode model (inspect always uses plant)", AppSettings.MODELS, s.model)
-        fps = edit(form, "Frames per second (1-30)", s.fps.toString(), InputType.TYPE_CLASS_NUMBER)
-        votes = edit(form, "Inspect: frames voted per leaf (1-5)", s.votes.toString(), InputType.TYPE_CLASS_NUMBER)
-        minConf = edit(form, "Popup minimum confidence 0-1 (empty = per model: plant 0.40, COCO 0.50)",
+        source = spinner(form, Lang.t("f_source"), sources, s.source)
+        mode = spinner(form, Lang.t("f_mode"), AppSettings.MODES, s.mode)
+        model = spinner(form, Lang.t("f_model"), AppSettings.MODELS, s.model)
+        fps = edit(form, Lang.t("f_fps"), s.fps.toString(), InputType.TYPE_CLASS_NUMBER)
+        votes = edit(form, Lang.t("f_votes"), s.votes.toString(), InputType.TYPE_CLASS_NUMBER)
+        minConf = edit(form, Lang.t("f_minconf"),
             if (s.minConf < 0f) "" else s.minConf.toString(),
             InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
-        classes = edit(form, "Stream mode: classes allowed to pop up, comma separated (empty = all)",
+        classes = edit(form, Lang.t("f_classes"),
             s.popupClasses.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
-        crops = edit(form, "Inspect: crops to inspect, comma separated (empty = any plant)",
+        crops = edit(form, Lang.t("f_crops"),
             s.crops.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
         showCamera = CheckBox(this).apply {
-            text = "Show the camera image behind the popup (turn OFF on see-through glasses)"
+            text = Lang.t("cb_show_camera")
             isChecked = s.showCamera
         }
         form.addView(showCamera)
         showBoxes = CheckBox(this).apply {
-            text = "Show the detection boxes (and their labels) on the image"
+            text = Lang.t("cb_show_boxes")
             isChecked = s.showBoxes
         }
         form.addView(showBoxes)
         debug = CheckBox(this).apply {
-            text = "Debug view (camera frame, boxes, stats - off on the glasses)"
+            text = Lang.t("cb_debug")
             isChecked = s.debug
             contentDescription = "debug"
         }
@@ -98,12 +101,12 @@ class SettingsActivity : Activity() {
             setPadding(0, 24, 0, 0)
         }
         buttons.addView(Button(this).apply {
-            text = "Save"
+            text = Lang.t("btn_save")
             contentDescription = "save"
             setOnClickListener { save(prefs, s) }
         })
         buttons.addView(Button(this).apply {
-            text = "Cancel"
+            text = Lang.t("btn_cancel")
             setOnClickListener { finish() }
         })
         form.addView(buttons)
@@ -123,6 +126,7 @@ class SettingsActivity : Activity() {
             debug = debug.isChecked,
             showCamera = showCamera.isChecked,
             showBoxes = showBoxes.isChecked,
+            language = Lang.CODES[language.selectedItemPosition],
             minConf = minConf.text.toString().trim().toFloatOrNull() ?: -1f,
             popupClasses = AppSettings.parseClasses(classes.text.toString()),
             crops = AppSettings.parseClasses(crops.text.toString()),

@@ -20,7 +20,10 @@ class DemoRepository(private val dir: File, private val host: String, private va
         val sizeBytes: Long, val hasTimeline: Boolean,
         val onServer: Boolean,        // the server can send it
         val local: Boolean,           // already in the files folder (complete)
-    )
+        val titleZh: String = "",     // Chinese title from the catalog (empty = use [title])
+    ) {
+        fun shownTitle() = if (Lang.current == "zh" && titleZh.isNotEmpty()) titleZh else title
+    }
 
     /** Result of [list]: the demos, and why the server part is missing (null = server answered). */
     data class Listing(val demos: List<Demo>, val serverError: String?)
@@ -102,7 +105,7 @@ class DemoRepository(private val dir: File, private val host: String, private va
                 val o = arr.getJSONObject(i)
                 Demo(o.getString("id"), o.getString("title"), o.optString("crop", "-"), o.optString("mode", "inspect"),
                     o.getString("file"), o.optLong("size_bytes", 0), o.optBoolean("has_timeline", false),
-                    onServer = o.optBoolean("available", false), local = false)
+                    onServer = o.optBoolean("available", false), local = false, titleZh = o.optString("title_zh", ""))
             }
         }
 

@@ -25,10 +25,10 @@ object PopupRules {
         val sure = !namesSomething || v.confidence >= minConf
         return when {
             namesSomething && !sure ->
-                Content("Not sure - look closer\n(${v.label} ${f2(v.confidence)})", YELLOW, false)
+                Content(Lang.t("not_sure", Lang.label(v.label), f2(v.confidence)), YELLOW, false)
             v.kind == Kind.NONE || v.kind == Kind.FAILED || v.kind == Kind.OTHER_PLANT -> Content(v.text, GREY, true)
             else -> Content(
-                v.text + if (v.frames > 1) "\n${v.agree}/${v.frames} frames agree" else "",
+                v.text + if (v.frames > 1) "\n" + Lang.t("frames_agree", v.agree, v.frames) else "",
                 when (v.kind) {
                     Kind.DISEASE -> ORANGE
                     Kind.HEALTHY -> GREEN

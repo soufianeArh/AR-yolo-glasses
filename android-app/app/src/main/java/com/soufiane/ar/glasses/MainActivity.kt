@@ -84,6 +84,7 @@ class MainActivity : Activity() {
     private lateinit var cameraButton: Button
     private lateinit var sourceLabel: TextView
     private var alwaysShowBar = false
+    private var builtLang = ""
     private var paused = false
     @Volatile private var timeline: Timeline? = null
     private val hideBar = Runnable { bar.visibility = View.GONE }
@@ -127,9 +128,12 @@ class MainActivity : Activity() {
             setOnLongClickListener { openSettings(); true }                  // glasses touchpad: long-press
             setOnTouchListener { _, e -> if (e.action == MotionEvent.ACTION_DOWN) showBar(); false }
         }
-        homeButton = barButton("⌂  Home") { goHome() }
-        cameraButton = barButton("◉  Camera") { switchToCamera() }
-        pauseButton = barButton("❚❚  Pause") { togglePause() }
+        val lang0 = AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE)).language
+        Lang.current = lang0
+        builtLang = lang0
+        homeButton = barButton(Lang.t("home")) { goHome() }
+        cameraButton = barButton(Lang.t("camera")) { switchToCamera() }
+        pauseButton = barButton(Lang.t("pause")) { togglePause() }
         sourceLabel = TextView(this).apply {
             setTextColor(Color.rgb(230, 230, 230))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -147,10 +151,10 @@ class MainActivity : Activity() {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(homeButton)
-                addView(barButton("▶  Videos") { openVideos() })
+                addView(barButton(Lang.t("videos")) { openVideos() })
                 addView(cameraButton)
                 addView(pauseButton)
-                addView(barButton("⚙  Settings") { openSettings() })
+                addView(barButton(Lang.t("settings")) { openSettings() })
             })
         }
         loading = TextView(this).apply {
@@ -183,11 +187,13 @@ class MainActivity : Activity() {
     private fun applyLaunchExtras(i: Intent?): Boolean {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val extras = i?.extras
-        // 8.9: the demo list sends the video's title; remembered per source, for the bar.
+        // 8.9: the demo list sends the video's titles (English + Chinese); remembered per source, for the bar.
         val title = extras?.getString("title")
         val titled = extras?.getString("source")
-        if (title != null && titled != null) prefs.edit().putString("title_$titled", title).apply()
+        if (title != null && titled != null) prefs.edit().putString("title_$titled", title)
+            .putString("title_zh_$titled", extras.getString("title_zh") ?: "").apply()
         extras?.remove("title")
+        extras?.remove("title_zh")
         val openSettings = extras?.getBoolean("settings", false) ?: false
         extras?.remove("settings")
         val (s, changed) = AppSettings.load(prefs).withExtras(extras)
@@ -202,8 +208,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE)).language != builtLang) {
+            recreate()                                // language changed in Settings: redraw the bar
+            return
+        }
         paused = false
-        pauseButton.text = "❚❚  Pause"
+        pauseButton.text = Lang.t("pause")
         startPipeline()
         showBar()
     }
@@ -242,15 +252,17 @@ class MainActivity : Activity() {
         val s = settings
         alwaysShowBar = showsFrames(s)
         cameraButton.visibility = if (s.source == "camera") View.GONE else View.VISIBLE   // only moves that change something
-        val what = if (s.mode == "inspect") "plant inspection" else "object stream"
+        val what = Lang.t(if (s.mode == "inspect") "plant_inspection" else "object_stream")
         sourceLabel.text = when {
-            s.source == "camera" -> "Live camera  ·  $what"
+            s.source == "camera" -> Lang.t("live_camera") + "  ·  $what"
             s.source.startsWith("video:") -> {
-                val title = getSharedPreferences(PREFS, MODE_PRIVATE).getString("title_${s.source}", null)
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                val title = prefs.getString("title_zh_${s.source}", null)?.takeIf { Lang.current == "zh" && it.isNotEmpty() }
+                    ?: prefs.getString("title_${s.source}", null)
                     ?: s.source.removePrefix("video:").removeSuffix(".mp4").removeSuffix("-6s").replace('-', ' ')
-                "Video: $title  ·  $what"
+                Lang.t("video_prefix", title) + "  ·  $what"
             }
-            else -> "Test image"
+            else -> Lang.t("test_image")
         }
         showBar()
     }
@@ -262,7 +274,7 @@ class MainActivity : Activity() {
         s.save(prefs)
         Log.i(TAG, "SETTINGS_SAVED from=button changed=[source] ${s.describe()}")
         paused = false
-        pauseButton.text = "❚❚  Pause"
+        pauseButton.text = Lang.t("pause")
         startPipeline()
     }
 
@@ -295,11 +307,11 @@ class MainActivity : Activity() {
         paused = !paused
         if (paused) {
             stopPipeline("paused")
-            pauseButton.text = "▶  Play"
+            pauseButton.text = Lang.t("play")
             answer.setTextColor(Color.rgb(160, 160, 160))
-            answer.text = "paused"
+            answer.text = Lang.t("paused")
         } else {
-            pauseButton.text = "❚❚  Pause"
+            pauseButton.text = Lang.t("pause")
             startPipeline()
         }
         Log.i(TAG, "PAUSE paused=$paused")
@@ -338,6 +350,7 @@ class MainActivity : Activity() {
     private fun startPipeline() {
         stopPipeline("restart")                       // never two pipelines, whatever calls this twice
         settings = AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE))
+        Lang.current = settings.language
         val gen = synchronized(pipeLock) { generation }
         Log.i(TAG, "CONFIG ${settings.describe()}")
         status.visibility = if (settings.debug) View.VISIBLE else View.GONE
@@ -386,7 +399,7 @@ class MainActivity : Activity() {
     private fun startVideo(gen: Int, s: AppSettings, name: String) {
         val file = File(getExternalFilesDir(null), name)
         if (!file.exists()) {
-            setStatus("video not found: $file  (adb push it there)", error = true)
+            setStatus(Lang.t("video_not_found", file.name), error = true)
             return
         }
         setStatus("loading $name ...")
@@ -399,12 +412,12 @@ class MainActivity : Activity() {
             if (timeline != null) Log.i(TAG, "TIMELINE ${file.name}: ${timeline!!.holds.size} holds with expected answers")
             val key = "${file.absolutePath}@${s.fps}"
             val src = cachedSource?.takeIf { it.first == key }?.second ?: FileSource(file, File(cacheDir, "frames").apply { mkdirs() }).also {
-                runOnUiThread { loading.text = "Loading video..."; loading.visibility = View.VISIBLE }
+                runOnUiThread { loading.text = Lang.t("loading_video", 0); loading.visibility = View.VISIBLE }
                 var lastPct = -1
                 it.load(s.fps.toDouble()) { pct ->
                     if (pct != lastPct) {
                         lastPct = pct
-                        runOnUiThread { loading.text = "Loading video...  $pct%\n(first time only)" }
+                        runOnUiThread { loading.text = Lang.t("loading_video", pct) }
                     }
                 }
                 runOnUiThread { loading.visibility = View.GONE }
@@ -422,7 +435,7 @@ class MainActivity : Activity() {
                 Log.i(TAG, "CAMERA_PERMISSION requested")
                 requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)  // onResume runs again after the answer
             } else {
-                setStatus("camera permission refused - choose another source in settings", error = true)
+                setStatus(Lang.t("camera_refused"), error = true)
             }
             return
         }
@@ -440,7 +453,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(code, permissions, results)
         val ok = results.firstOrNull() == PackageManager.PERMISSION_GRANTED
         Log.i(TAG, "CAMERA_PERMISSION granted=$ok")
-        if (!ok) setStatus("camera permission refused - choose another source in settings", error = true)
+        if (!ok) setStatus(Lang.t("camera_refused"), error = true)
     }
 
     /** Starts the chosen mode on [src] unless the screen was left meanwhile. */
@@ -467,19 +480,19 @@ class MainActivity : Activity() {
         if (!isCurrent(gen)) return@runOnUiThread
         when (st) {
             Connection.State.CONNECTED -> {
-                if (connWasLost) popup.show("conn", "Server back", PopupRules.GREEN)
+                if (connWasLost) popup.show("conn", Lang.t("server_back"), PopupRules.GREEN)
                 connWasLost = false
                 connLine = null
             }
             Connection.State.DISCONNECTED -> {
                 if (!connWasLost) {
-                    if (why.contains("slow network")) popup.show("conn", "Network too slow\nreconnecting...", PopupRules.YELLOW)
-                    else popup.show("conn", "No connection to the server\nretrying...", PopupRules.RED)
+                    if (why.contains("slow network")) popup.show("conn", Lang.t("net_slow_reconnect"), PopupRules.YELLOW)
+                    else popup.show("conn", Lang.t("no_connection"), PopupRules.RED)
                 }
                 connWasLost = true
-                connLine = "no server - " + why.substringAfterLast("; ", "retrying")
+                connLine = Lang.t("no_server")
             }
-            Connection.State.CONNECTING -> if (connWasLost) connLine = "reconnecting..."
+            Connection.State.CONNECTING -> if (connWasLost) connLine = Lang.t("reconnecting")
         }
         answer.setTextColor(if (connLine != null) PopupRules.RED else Color.rgb(160, 160, 160))
         answer.text = connLine ?: ""
@@ -501,7 +514,7 @@ class MainActivity : Activity() {
                 lastStreamResult = r.frameId
                 val show = stable.next(r.detectionsList.map { it.label to it.confidence })
                 if (show != null) runOnUiThread {
-                    if (isCurrent(gen)) popup.show(show.first, "${show.first}  ${PopupRules.f2(show.second)}", PopupRules.GREEN)
+                    if (isCurrent(gen)) popup.show(show.first, "${Lang.label(show.first)}  ${PopupRules.f2(show.second)}", PopupRules.GREEN)
                 }
             }
         }
@@ -553,7 +566,7 @@ class MainActivity : Activity() {
         ifStillCurrent(gen) {
             val c = BackendClient(s.host, s.port, DEVICE_TOKEN, ::showResult) { e ->
                 Log.e(TAG, "RESULT_ERROR ${e.javaClass.simpleName}: ${e.message}")
-                runOnUiThread { setStatus("backend error: ${e.message}", error = true) }
+                runOnUiThread { setStatus(Lang.t("backend_error", e.message), error = true) }
             }
             closer = c::close
             c.send(1, image, listOf("plant"))

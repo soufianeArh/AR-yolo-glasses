@@ -38,6 +38,6 @@ class Timeline(val holds: List<Hold>) {
 
         /** "expected: Corn rust leaf ✓" - the line under the popup. */
         fun verdictLine(expected: String, said: String): String =
-            "expected: $expected  " + if (expected == said) "✓" else "✗"
+            Lang.t("expected", Lang.label(expected)) + "  " + if (expected == said) "✓" else "✗"   // compare raw labels
     }
 }

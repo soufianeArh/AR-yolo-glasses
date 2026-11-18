@@ -27,10 +27,13 @@ class WelcomeActivity : Activity() {
 
     private lateinit var serverLine: TextView
     private lateinit var demoLine: TextView
+    private var builtLang = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val s = AppSettings.load(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE))
+        Lang.current = s.language
+        builtLang = s.language
         val fromLauncher = intent?.action == Intent.ACTION_MAIN && savedInstanceState == null
         if (fromLauncher && s.startScreen == "inspect") {
             Log.i(MainActivity.TAG, "WELCOME skipped (start screen = inspect)")
@@ -43,23 +46,22 @@ class WelcomeActivity : Activity() {
             setBackgroundColor(Color.BLACK)
             setPadding(64, 48, 64, 48)
         }
-        col.addView(text("AR Plant Inspector", 40f, Color.WHITE))
-        col.addView(text("Look at a corn, tomato or potato leaf and hold still:\n" +
-            "the glasses tell you if it is diseased.", 18f, Color.rgb(170, 170, 170)).apply { setPadding(0, 12, 0, 28) })
+        col.addView(text(Lang.t("app_name"), 40f, Color.WHITE))
+        col.addView(text(Lang.t("tagline"), 18f, Color.rgb(170, 170, 170)).apply { setPadding(0, 12, 0, 28) })
         serverLine = text("server: checking...", 16f, Color.rgb(170, 170, 170))
         demoLine = text("", 16f, Color.rgb(170, 170, 170)).apply { setPadding(0, 4, 0, 32) }
         col.addView(serverLine)
         col.addView(demoLine)
 
-        val inspect = button("Start inspection (camera)", Color.rgb(120, 255, 120)) {
+        val inspect = button(Lang.t("btn_start_camera"), Color.rgb(120, 255, 120)) {
             startActivity(Intent(this, MainActivity::class.java)
                 .putExtra("source", "camera").putExtra("mode", "inspect"))
         }
         col.addView(inspect)
-        col.addView(button("Demo videos", Color.rgb(255, 200, 90)) {
+        col.addView(button(Lang.t("btn_demos"), Color.rgb(255, 200, 90)) {
             startActivity(Intent(this, DemoListActivity::class.java))
         })
-        col.addView(button("Settings", Color.rgb(170, 170, 170)) {
+        col.addView(button(Lang.t("btn_settings"), Color.rgb(170, 170, 170)) {
             startActivity(Intent(this, SettingsActivity::class.java))
         })
         setContentView(col)
@@ -69,7 +71,11 @@ class WelcomeActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val s = AppSettings.load(getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE))
-        serverLine.text = "server ${s.host}:${s.port}: checking..."
+        if (s.language != builtLang) {                     // language changed in Settings: redraw
+            recreate()
+            return
+        }
+        serverLine.text = Lang.t("server_checking", "${s.host}:${s.port}")
         thread(name = "welcome-check") {
             val scheduler = try {
                 Socket().use { it.connect(InetSocketAddress(s.host, s.port), 1500) }; true
@@ -80,10 +86,10 @@ class WelcomeActivity : Activity() {
             Log.i(MainActivity.TAG, "WELCOME scheduler_reachable=$scheduler demos=${listing.demos.size} " +
                 "demo_server=${listing.serverError ?: "ok"}")
             runOnUiThread {
-                serverLine.text = "server ${s.host}:${s.port}: " + if (scheduler) "reachable ✓" else "NOT reachable ✗ (check Settings)"
+                serverLine.text = Lang.t(if (scheduler) "server_ok" else "server_bad", "${s.host}:${s.port}")
                 serverLine.setTextColor(if (scheduler) Color.rgb(120, 255, 120) else Color.rgb(255, 120, 120))
-                demoLine.text = "${listing.demos.size} demo videos" +
-                    if (listing.serverError != null) " (demo server not reachable: only videos already on this device)" else ""
+                demoLine.text = Lang.t("demos_count", listing.demos.size) +
+                    if (listing.serverError != null) Lang.t("demos_offline") else ""
             }
         }
     }

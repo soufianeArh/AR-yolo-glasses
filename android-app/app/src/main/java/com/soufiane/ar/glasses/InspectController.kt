@@ -60,12 +60,12 @@ class InspectController<F : Any>(
         /** What the wearer reads. */
         val text: String
             get() = when (kind) {
-                Kind.DISEASE -> "$label  ${PopupRules.f2(confidence)}"
-                Kind.HEALTHY -> "Healthy leaf ($label)"
-                Kind.NONE -> "No leaf disease found"
-                Kind.UNCERTAIN -> "Unsure: $label or $second?"
-                Kind.FAILED -> if (note != null) "$note - try again" else "Check failed - try again"
-                Kind.OTHER_PLANT -> "Not a ${note ?: "corn, tomato or potato"} leaf"
+                Kind.DISEASE -> "${Lang.label(label)}  ${PopupRules.f2(confidence)}"
+                Kind.HEALTHY -> Lang.t("healthy", Lang.label(label))
+                Kind.NONE -> Lang.t("none")
+                Kind.UNCERTAIN -> Lang.t("unsure", Lang.label(label), Lang.label(second ?: "-"))
+                Kind.FAILED -> if (note != null) Lang.t("failed_note", Lang.t(note)) else Lang.t("failed")
+                Kind.OTHER_PLANT -> Lang.t("other_plant", Lang.orList((note ?: "corn,potato,tomato").split(",")))
             }
     }
 
@@ -120,7 +120,7 @@ class InspectController<F : Any>(
                         Log.w(MainActivity.TAG, "INSPECT_LOST hold=$hold frame=$pendingId")
                         pendingId = -1
                         lostNow = true
-                        finish("Network too slow")
+                        finish("net_slow")                                  // a Lang key
                     } else if (pendingId < 0 && (movedDuringCheck || votes.size >= voteFrames)) {
                         // Nothing in flight and no more votes coming (the wearer moved on between two
                         // votes): decide with what we have. Without this the check never ended and no
@@ -200,7 +200,7 @@ class InspectController<F : Any>(
         Log.d(MainActivity.TAG, "INSPECT_SEND hold=$hold frame=$pendingId pos_ms=$positionMs bytes=${image.size}")
         if (!send(pendingId, image, listOf("plant"))) {
             pendingId = -1
-            finish(if (votes.isEmpty()) "Network too slow" else null)   // decide with the votes we have
+            finish(if (votes.isEmpty()) "net_slow" else null)           // decide with the votes we have
         }
     }
 
@@ -222,7 +222,7 @@ class InspectController<F : Any>(
     private fun publish() {
         val snap = synchronized(lock) {
             Snapshot(state, change, lastFrame, lastResult, verdict, verdictHold,
-                if (state == State.CHECKING) "checking leaf... (${votes.size}/$voteFrames)" else null,
+                if (state == State.CHECKING) Lang.t("checking", votes.size, voteFrames) else null,
                 "INSPECT  state=$state  change=${"%.1f".format(change)} (steady < $steadyThreshold, " +
                     "$steadyCount/$steadyFrames)  hold=$hold  votes=${votes.size}/$voteFrames  reused=$reused", verdictPos)
         }
@@ -263,7 +263,7 @@ class InspectController<F : Any>(
                 val other = ok.flatMap { it.detectionsList }.maxByOrNull { it.confidence }
                     ?: return Verdict(Kind.NONE, "-", 0f, 0, ok.size, null)
                 return Verdict(Kind.OTHER_PLANT, other.label, other.confidence, 0, ok.size, null,
-                    note = crops.sorted().let { c -> if (c.size > 1) c.dropLast(1).joinToString(", ") + " or " + c.last() else c.joinToString() })
+                    note = crops.sorted().joinToString(","))                   // shown via Lang.orList
             }
             val byLabel = tops.groupBy { it.label }.mapValues { (_, d) -> d.sumOf { it.confidence.toDouble() } }
             val ranked = byLabel.entries.sortedByDescending { it.value }
