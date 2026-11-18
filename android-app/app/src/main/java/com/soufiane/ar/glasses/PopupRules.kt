@@ -26,7 +26,7 @@ object PopupRules {
         return when {
             namesSomething && !sure ->
                 Content("Not sure - look closer\n(${v.label} ${f2(v.confidence)})", YELLOW, false)
-            v.kind == Kind.NONE || v.kind == Kind.FAILED -> Content(v.text, GREY, true)
+            v.kind == Kind.NONE || v.kind == Kind.FAILED || v.kind == Kind.OTHER_PLANT -> Content(v.text, GREY, true)
             else -> Content(
                 v.text + if (v.frames > 1) "\n${v.agree}/${v.frames} frames agree" else "",
                 when (v.kind) {

@@ -31,7 +31,8 @@ class InspectControllerTest {
         c = InspectController(
             send = { id, _, models -> assertEquals(listOf("plant"), models); if (canSend) sent += id; canSend },
             thumb = { it }, encode = { ByteArray(1) },
-            voteFrames = 2, clock = { now }, onLost = { lostCalls++ }, onUpdate = { last = it },
+            voteFrames = 2, crops = setOf("corn", "tomato", "potato"), clock = { now },
+            onLost = { lostCalls++ }, onUpdate = { last = it },
         )
     }
 
@@ -141,7 +142,54 @@ class InspectControllerTest {
         assertEquals(Kind.FAILED, last!!.verdict!!.kind)
     }
 
+    /** Only the LAST checked leaf is remembered: A, then B, then back to A = a new check of A. */
+    @Test
+    fun onlyTheLastCheckedLeafIsRemembered() {
+        frames(a, 5)
+        c.onResult(result(1, "Corn rust leaf", 0.8f), 100)
+        frames(a, 1)
+        c.onResult(result(2, "Corn rust leaf", 0.9f), 100)
+        frames(b, 5)                                         // another leaf: checked
+        c.onResult(result(3, "Corn leaf blight", 0.8f), 100)
+        frames(b, 1)
+        c.onResult(result(4, "Corn leaf blight", 0.8f), 100)
+        assertEquals(4, sent.size)
+        frames(a2, 5)                                        // back to the first leaf (diff 2 to a)
+        assertEquals(5, sent.size)                           // checked again: B was checked in between
+    }
+
+    @Test
+    fun sameViewReuseOnlyForTheLastLeafAndOnlyRecently() {
+        frames(a, 5)
+        c.onResult(result(1, "Corn rust leaf", 0.8f), 100)
+        frames(a, 1)
+        c.onResult(result(2, "Corn rust leaf", 0.9f), 100)
+        val firstHold = last!!.verdictHold
+        frames(b, 1); frames(a2, 5)                          // quick look away and back: reused
+        assertEquals(2, sent.size)
+        assertTrue(last!!.verdictHold > firstHold)           // a new hold number -> the popup shows again
+        assertEquals("Corn rust leaf", last!!.verdict!!.label)
+        now += 61_000                                        // a minute later: checked again
+        frames(b, 1); frames(a, 5)
+        assertEquals(3, sent.size)
+    }
+
     // ------------------------------------------------------------------ the vote
+
+    @Test
+    fun voteKeepsOnlyOurCrops() {
+        val crops = setOf("corn", "tomato", "potato")
+        val twoDets = FrameResult.newBuilder().setFrameId(1).setStatus(ResultStatus.OK)
+            .addDetections(Detection.newBuilder().setLabel("Blueberry leaf").setConfidence(0.82f))
+            .addDetections(Detection.newBuilder().setLabel("Potato leaf late blight").setConfidence(0.41f)).build()
+        val v = InspectController.vote(listOf(twoDets), crops)
+        assertEquals(Kind.DISEASE, v.kind)                   // the potato detection wins over the blueberry one
+        assertEquals("Potato leaf late blight", v.label)
+        val other = InspectController.vote(listOf(result(1, "Apple Scab Leaf", 0.95f)), crops)
+        assertEquals(Kind.OTHER_PLANT, other.kind)
+        assertEquals("Not a corn, potato or tomato leaf", other.text)
+        assertEquals(Kind.DISEASE, InspectController.vote(listOf(result(1, "Apple Scab Leaf", 0.95f))).kind)
+    }
 
     @Test
     fun voteMajorityWins() {

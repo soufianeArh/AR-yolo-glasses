@@ -30,6 +30,7 @@ import java.util.concurrent.Executors
  *     --es mode inspect | stream        plant look-and-hold (8.4) | every frame (8.3)
  *     --es model default | plant        stream mode's model
  *     --ei fps 8  --ei votes 2  --ez debug true  --ef minconf 0.4  --es popup_classes "person,cow"
+ *     --es crops "corn,tomato,potato"   inspect: only these crops (empty = any plant)
  *     --ez settings true                open the settings screen
  *
  * Lifecycle: the pipeline (camera source + gRPC stream) runs only while the app is in front:
@@ -334,7 +335,7 @@ class MainActivity : Activity() {
             if (st == Connection.State.DISCONNECTED) ctrl.onStreamLost()       // a check in progress ends
             showConnState(gen, st, why)
         }
-        ctrl = InspectController.forBitmaps(conn::send, s.votes,
+        ctrl = InspectController.forBitmaps(conn::send, s.votes, s.crops,
             onLost = { conn.reset("no answer in time (slow network)") }) { snap ->
             if (s.debug) debugView.show(snap)
             runOnUiThread { if (isCurrent(gen)) showInspection(snap, s) }

@@ -33,6 +33,7 @@ class SettingsActivity : Activity() {
     private lateinit var votes: EditText
     private lateinit var minConf: EditText
     private lateinit var classes: EditText
+    private lateinit var crops: EditText
     private lateinit var debug: CheckBox
     private lateinit var sources: List<String>
 
@@ -66,6 +67,8 @@ class SettingsActivity : Activity() {
             InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
         classes = edit(form, "Stream mode: classes allowed to pop up, comma separated (empty = all)",
             s.popupClasses.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
+        crops = edit(form, "Inspect: crops to inspect, comma separated (empty = any plant)",
+            s.crops.sorted().joinToString(", "), InputType.TYPE_CLASS_TEXT)
         debug = CheckBox(this).apply {
             text = "Debug view (camera frame, boxes, stats - off on the glasses)"
             isChecked = s.debug
@@ -103,6 +106,7 @@ class SettingsActivity : Activity() {
             debug = debug.isChecked,
             minConf = minConf.text.toString().trim().toFloatOrNull() ?: -1f,
             popupClasses = AppSettings.parseClasses(classes.text.toString()),
+            crops = AppSettings.parseClasses(crops.text.toString()),
         ).validated()
         s.save(prefs)
         Log.i(MainActivity.TAG, "SETTINGS_SAVED from=screen changed=${AppSettings.changedKeys(old, s)} ${s.describe()}")

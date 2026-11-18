@@ -28,6 +28,8 @@ data class AppSettings(
     val minConf: Float = -1f,
     /** Stream mode: object classes allowed to pop up (lower case); empty = all. */
     val popupClasses: Set<String> = emptySet(),
+    /** Inspect mode: the crops we inspect (first word of the plant label); empty = any plant. */
+    val crops: Set<String> = DEFAULT_CROPS,
 ) {
     fun minConfFor(model: String): Float = if (minConf >= 0f) minConf else MIN_CONFIDENCE[model] ?: 0.5f
 
@@ -49,7 +51,8 @@ data class AppSettings(
     /** One line for logcat (tests read it). */
     fun describe() = "host=$host port=$port source=$source mode=$mode model=$model fps=$fps votes=$votes " +
         "debug=$debug minconf=${if (minConf < 0f) "per-model" else minConf} " +
-        "popup_classes=${if (popupClasses.isEmpty()) "all" else popupClasses.sorted().joinToString(",")}"
+        "popup_classes=${if (popupClasses.isEmpty()) "all" else popupClasses.sorted().joinToString(",")} " +
+        "crops=${if (crops.isEmpty()) "any" else crops.sorted().joinToString(",")}"
 
     fun save(prefs: SharedPreferences) {
         prefs.edit()
@@ -57,6 +60,7 @@ data class AppSettings(
             .putString("mode", mode).putString("model", model).putInt("fps", fps).putInt("votes", votes)
             .putBoolean("debug", debug).putFloat("minconf", minConf)
             .putString("popup_classes", popupClasses.sorted().joinToString(","))
+            .putString("crops", crops.sorted().joinToString(","))
             .apply()
     }
 
@@ -74,6 +78,7 @@ data class AppSettings(
             debug = if (e.containsKey("debug")) e.getBoolean("debug", debug) else debug,
             minConf = if (e.containsKey("minconf")) e.getFloat("minconf", minConf) else minConf,
             popupClasses = e.getString("popup_classes")?.let(::parseClasses) ?: popupClasses,
+            crops = e.getString("crops")?.let(::parseClasses) ?: crops,
         ).validated()
         return s to changedKeys(this, s)
     }
@@ -81,6 +86,7 @@ data class AppSettings(
     companion object {
         val MODES = listOf("inspect", "stream")
         val MODELS = listOf("default", "plant")
+        val DEFAULT_CROPS = setOf("corn", "tomato", "potato")
 
         /** Popup threshold per model (8.5). plant 0.40: the correct answers in 8.4 went down to 0.44. */
         val MIN_CONFIDENCE = mapOf("plant" to 0.40f, "default" to 0.50f)
@@ -98,6 +104,7 @@ data class AppSettings(
                 debug = prefs.getBoolean("debug", d.debug),
                 minConf = prefs.getFloat("minconf", d.minConf),
                 popupClasses = parseClasses(prefs.getString("popup_classes", "") ?: ""),
+                crops = prefs.getString("crops", null)?.let(::parseClasses) ?: d.crops,
             ).validated()
         }
 
@@ -111,6 +118,7 @@ data class AppSettings(
             if (a.model != b.model) add("model"); if (a.fps != b.fps) add("fps")
             if (a.votes != b.votes) add("votes"); if (a.debug != b.debug) add("debug")
             if (a.minConf != b.minConf) add("minconf"); if (a.popupClasses != b.popupClasses) add("popup_classes")
+            if (a.crops != b.crops) add("crops")
         }
     }
 }

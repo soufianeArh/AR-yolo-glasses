@@ -1,11 +1,13 @@
 # AR Glasses Detection: Architecture (Stream-Only, v1)
 
-Status: **Steps 0–6 built and tested**, **Step 7.1–7.5 built and tested**: shared contract,
-C++ inference workers (COCO YOLOv8 + the plant-disease model), Java scheduler with N workers
-(routing by model, per-model deadlines, retries, failover, per-session cap), benchmarks, and the
-Python control plane (Redis Stream → Postgres, rule engine, REST API).
-**Next:** Step 7.6 (train our own plant-disease YOLOv8 on Colab - prepared), then the Android app
-(Step 8, on the emulator) and the glasses (Step 9).
+Status: **Steps 0–6, 7.1–7.5 and 8 built and tested**: shared contract, C++ inference workers
+(COCO YOLOv8 + the plant-disease model), Java scheduler with N workers (routing by model,
+per-model deadlines, retries, failover, per-session cap), benchmarks, the Python control plane
+(Redis Stream → Postgres, rule engine, REST API), and the **Android app on a glasses-shaped
+emulator** (plant inspection "look and hold", popup, settings, self-repairing connection), tested
+end to end down to Postgres alerts.
+**Next:** Step 7.6 (train our own plant-disease YOLOv8 on Colab - prepared; the current model
+gives confident false alarms on real field footage), then the glasses (Step 9).
 Progress and results per step: see `ROADMAP.md`.
 
 **What the system detects: plant diseases on leaves.** The goal of the detection part is
@@ -75,7 +77,23 @@ with a copy of every result sent **async** to the Python control plane.
 
 ## 3. Components
 
-### 3.1 Android app (Kotlin), Step 8
+### 3.1 Android app (Kotlin) ✅ built (Step 8, on the emulator)
+
+As built (`android-app/`, package `com.soufiane.ar.glasses`; details and measurements in
+`ROADMAP.md` Step 8):
+- `InspectController`: look and hold → up to 2 frames voted → verdict; only our crops (corn,
+  tomato, potato) count; the same view again within 60 s re-shows the verdict without a check.
+- `StreamController`: every frame, ≤2 in flight, drop when busy (COCO stream mode).
+- `Popup` + `PopupRules`: what the popup says, its colour, 3 s hold, no flicker.
+- `Connection`: one gRPC stream at a time, repaired by itself (retry 1-2-4-8-10 s, 5 s connect
+  timeout); a frame with no answer in time resets the stream, so queued frames never arrive stale.
+- `AppSettings` + `SettingsActivity`: saved settings; launch extras are saved too (configure the
+  glasses with one `adb` command); long-press or the menu key opens the settings screen.
+- Sources: `FileSource` (video files, frames kept as JPEG), `CameraSource` (Camera2; the PC
+  webcam on the emulator). The pipeline runs only while the app is in front.
+- 27 JVM unit tests (`gradlew testDebugUnitTest`).
+
+The design it was built from:
 
 - **Modes:**
   - **Plant inspection, "look and hold" (main mode):** the app notices when the view is steady
@@ -327,6 +345,18 @@ vcpkg: a ~1 h from-source build needing ~10 GB free disk, so it isn't set up.
 
 All measured on one laptop (Intel i7-8550U, 4 cores / 8 threads, 15 W), clients included,
 no Wi-Fi. Full benchmark: `bench/summary.md`, `bench/throughput.png`.
+
+**The Android app on the emulator** (Step 8.8; emulator on the real graphics card, backend in WSL
+on the same laptop; the emulator's network adds ~0.3 s that real Wi-Fi should not):
+
+| Mode | Value |
+|---|---|
+| Plant inspection, per frame | round trip p50 2.2 s / p95 2.8 s (backend p50 1.6 s / p95 2.1 s) |
+| **Plant inspection, leaf held still → popup** | **p50 4.1 s, max 5.7 s** (0.5 s to see the view is still + 2 frames voted one after the other) |
+| COCO stream (8 fps asked, 300 ms deadline) | round trip p50 ~300 ms, ~5 answers/s, 14–23% of frames miss the deadline |
+
+Software rendering in the emulator (`-gpu swiftshader_indirect`) took ~65% of the CPU and doubled
+the plant time (leaf → popup 8.4 s): use `-gpu host`.
 
 **Plant inspection** (Step 7, current YOLOS model): **~1.6 s per inspection with 3 threads**
 (p95 1.8 s; 1.5–2.5 s through the whole chain as the CPU heats). Plant deadline 3.5 s.

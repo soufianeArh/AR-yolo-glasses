@@ -19,7 +19,7 @@ never stop the backend work.
 | 5 | Java scheduler v2, N workers | ✅ done, all suites pass; benchmark: best setup 3 workers × 2 threads, ~11 fps ceiling |
 | 6 | Python control plane | ✅ done, all suites pass; nothing lost when Redis or the consumer dies |
 | 7 | **Plant-disease detection in the backend** (the core goal of the detection part) | 7.1–7.5 ✅ done, all suites pass; 7.6 (training our own YOLOv8) prepared, waiting for the Colab run |
-| 8 | Android app on the emulator, shaped like the glasses (no phone step) | — |
+| 8 | Android app on the emulator, shaped like the glasses (no phone step) | ✅ done: inspection + popup + settings + self-repairing connection, full chain to Postgres tested; leaf → popup p50 4.1 s; webcam leaf test skipped |
 | 9 | On the glasses | — |
 
 **Where things run:** the whole backend runs in **WSL Ubuntu** (Linux), see
@@ -470,7 +470,7 @@ From Windows: `tools/.venv/Scripts/python tools/compare_plant.py`, `tools/export
 
 ---
 
-## Step 8: Android app on the emulator, shaped like the glasses
+## Step 8: Android app on the emulator, shaped like the glasses ✅
 
 **Goal:** the real client, built and tested on the Android emulator configured to act like the
 glasses. **No phone step** (decided 2026-11-17): the phone was only ever a stand-in for the
@@ -545,8 +545,8 @@ the model to use (`plant` or `default`) → get the detections back → decide w
 | **8.4** ✅ | Plant inspection "look and hold" + **vote over several frames** | `InspectController`: hold = 40×22 grey thumbnail change < 5 for 4 frames (0.5 s at 8 fps; calibrated on the videos: holding p95 2.5, moving median 45); then ONE frame at a time to `plant` (JPEG q90), up to 2 votes while the view stays still; verdict = confidence-weighted vote (disease / healthy / no leaf / "unsure: A or B" / failed); no re-check of the same leaf until the view moves; wearer sees "checking leaf... (n/2)" then the verdict top-right; logcat `INSPECT_START/VOTE/RESULT`. Launch: `--es source video:corn-look-and-hold-6s.mp4 --es mode inspect` | **Done:** on the 6 s-hold videos (`make_plant_videos.py --hold 6 --suffix=-6s`): **14/14 holds inspected, 0 false starts while moving, 8/14 correct** (= the model's Step 7 score; the app adds no errors - wrong ones are model mistakes, e.g. potato late blight -> "Blueberry leaf"); hold → verdict p50 8.4 s, max 10.5 s with 2 votes (each plant frame 3.4–5.4 s backend because the emulator eats the CPU; ~2–2.5 s without it). Dev backend: `start-backend.sh --plant-threads 3 --plant-deadline-ms 8000` (at 3500 ms every plant frame was DROPPED_DEADLINE with the emulator running). Better accuracy = 7.6 (YOLOv8 retrain) |
 | **8.5** ✅ | The popup | Black screen (debug view OFF by default, `--ez debug true` to see frame/boxes/stats); `Popup`: top-right, black fill + coloured border (orange disease, green healthy, yellow unsure/below threshold, grey none/failed), fade in 150 ms, hold 3 s, fade out 500 ms; the same answer again only extends it (no re-animation = no flicker); minimum confidence per model (`MIN_CONFIDENCE`: plant 0.40, COCO 0.50; `--ef minconf`), below it "Not sure - look closer"; small grey "checking leaf... (n/2)" bottom-right; stream mode (COCO): popup only when the same top label comes twice in a row; logcat `POPUP_SHOW/EXTEND/HIDE/VERDICT` | **Done:** 3 videos, 14 holds: **14/14 popups, text = verdict 14/14, 0 flicker, on screen 3.5–3.6 s**, then fully black; correct 8/14 (model level). **Bug found and fixed:** if the 1st vote's answer arrived just as the view started moving, the check never ended and no leaf was inspected again (potato run stopped after 2 leaves) - now decides with the votes it has; lost-answer timeout 12 s (must exceed the backend's 8 s dev plant deadline). Unit tests: vote, disease words, the stuck-check regression (`app/src/test`, 8.6 round). Stream-mode popup built, measured in 8.8 (no RAM for a COCO worker next to the emulator) |
 | **8.6** ✅ | Settings + lifecycle | `AppSettings` (SharedPreferences): server host/port, source, mode (default `inspect`), stream model, fps, votes, debug, popup min confidence, COCO popup classes; defaults < saved < launch extras, and **launch extras are saved** (one `adb shell am start ... --es host <ip>` configures the glasses for good); `SettingsActivity` (long-press on the screen = glasses touchpad, or the menu key; lists the videos in the app's folder); pipeline runs only while the app is in front (`onResume`/`onPause`), answers of a stopped pipeline dropped, decoded video reused on return, setups one at a time; screen kept on; 22 JVM unit tests (`gradlew testDebugUnitTest`: vote, inspection state machine incl. the 8.5 stuck-check regression - verified to fail with the bug put back -, popup rules, settings validation) | **Done:** settings survive an app restart (from extras and from a screen edit: votes 2→3 → `changed=[votes]`, kept after force-stop); long-press and menu key open settings; HOME while streaming → 0 frames sent after the stop, session closed cleanly; leaving while the video loads → `PIPELINE_DROPPED`, no session; back → restart in 0.4 s without re-decoding. **Bugs found and fixed:** stop came 3.7 s after HOME (`onStop` waits for the home screen to draw) with a frame + popup slipping out → `onPause`; new extras on the running app started the pipeline twice (one stream untracked) → one restart, 1 session; the same video decoded twice in parallel (~95 s) → one setup at a time. Known: a decoded test video holds ~260 MB of frames → shrink in 8.7 |
-| **8.7** | Robustness + webcam + reality check | Reconnects by itself, survives a backend restart, slow/lossy network (emulator network settings), never shows stale results; the PC webcam as the camera (`CameraXSource`); **1–2 short real field clips** (corn/tomato/potato, free stock) played through `FileSource` | Survives a scheduler restart and bad-network simulation; a leaf held in front of the webcam (printed or on a screen) gets inspected; on the real clips: answers make sense and wind-blown leaves don't trigger endless checks (not scored - no ground truth) |
-| **8.8** | Measure + document | Latency on the emulator for both modes, docs updated | Step 8's overall "done when" below is met |
+| **8.7** ✅ | Robustness + webcam + reality check | `Connection`: one gRPC stream at a time, repaired by itself (retry 1, 2, 4, 8, then every 10 s; an attempt not READY after 5 s counts as failed); answers of an old stream ignored; no inspection while offline; wearer sees "No connection to the server" (red) + "no server - retrying" line, then "Server back"; a frame with no answer in time resets the stream (drops frames still queued in the socket: never stale, the scheduler cancels them) + "Network too slow"; gRPC `isReady` backpressure kept; `CameraSource` (Camera2, no library; emulator back camera = PC webcam; permission asked once); `FileSource` keeps frames as JPEG (10.7 MB instead of ~260 MB for a 35 s video); `tools/slow_proxy.py` = a bad network on demand (rate + delay, changeable live) | **Done:** scheduler killed mid-inspection, back after 20 s → app back 3 s later, inspections resume; app started with the scheduler down (~3 min, 13 retries) → recovers alone; via the proxy: 100 kbit/s + 300 ms → works (~10 s round trip, correct popups), 30 kbit/s + 500 ms → "Network too slow" per leaf, no pile-up, back to normal at once when the link is good, **0 stale bursts** (before the reset fix: SESSION_LIMIT bursts of frames queued during the slow period); webcam: 640x480 frames, a still view gets inspected. Real field clips (`testdata/field/`, Pexels): app fine (no endless checks with leaves in the wind), **model gives confident false alarms**: healthy corn → "Corn leaf blight" 0.61–0.91, ornamental plant → "Apple Scab Leaf" 0.95; healthy tomato → "No leaf disease found" ✅ → argument for 7.6, rerun these clips after it. **Bugs found and fixed:** reconnect attempt hanging forever (no error, no success) → connect timeout; C++ worker took 35 s to re-register after a 70 s scheduler outage (gRPC reconnect backoff grows to 2 min) → capped at 1 s, now 1.4 s; frames queued on slow links arriving stale and together → stream reset. Not done: leaf held in front of the webcam (skipped: camera path proven, leaf recognition is tested with the videos; option: the emulator's virtual-scene camera). Emulator network shaping (`adb emu network`) proved unreliable for the emulator → WSL route and WSL has no `netem` → the proxy |
+| **8.8** ✅ | Measure + document | Both modes measured on the emulator (now on the real graphics card), docs updated (`ROADMAP.md`, `ARCHITECTURE.md` 3.1 and 6) | **Done:** **inspect** (3 plant videos, 14 leaves): 8/14 correct (= the model's level), per frame round trip p50 2.2 s / p95 2.8 s = backend p50 1.6 s / p95 2.1 s + emulator network/app ~0.3 s; **leaf held still → popup p50 4.1 s, max 5.7 s** (was 8.4 s with software rendering) - backend p95 2.1 s now fits the production plant deadline (3.5 s). **COCO stream** at the production 300 ms deadline: couple video → "person" popup, steady the whole minute (265 extensions, 0 flicker), round trip p50 292 ms, 5 answers/s, 14% missed the deadline; calves video → "cow" (kept up 170×) and sometimes "sheep" (COCO mistakes calves), p50 309 ms, 23% missed. Step 8's overall "done when" is met (below) |
 
 **Test videos - what each one is for:**
 | Video | Kind | Used for | Ground truth |
@@ -560,6 +560,32 @@ The simulated plant videos stay **the benchmark** (scored automatically, identic
 comparison, e.g. 7.6). They do not test real field conditions or unseen leaves - that is what the
 8.7 real clips, the webcam, and Step 9's glasses camera are for. No need to search for videos before 8.7.
 
+**Full chain test (after 8.7):** app (emulator) → Java scheduler → C++ plant worker → back to the app,
+and scheduler → Redis Stream `ar:results` → Python consumer + rules → Postgres → REST API (:8090),
+started with `start-backend.sh --plant-threads 3 --plant-deadline-ms 8000 --control`. Rules created
+through the API: `contains` blight (high), rust, spot (medium), confidence ≥ 0.5, cooldown 20 s.
+Corn video, one loop: **app 10 frames = 10 stored frames, same session, every label and confidence
+identical**; consumer lag 0; **4 alerts from 10 diseased frames**, each suppression explained (cooldown
+×5, below 0.5 ×1); alert time = when the scheduler received the frame. Open findings:
+- A frame cancelled because the app left is stored as `WORKER_FAILED` (worker was fine) → would
+  skew worker-health stats; needs its own status (e.g. `CANCELLED`, a contract change) or no record.
+- Alerts are judged per frame, the wearer sees one voted answer per leaf (usually the same; not
+  always, e.g. a popup with no alert because of the cooldown). Option: the app also sends its final
+  verdict, so alerts follow exactly what the wearer saw.
+
+**After 8.7 - two inspection improvements from the field clips:**
+- **Only our crops** (setting `crops`, default corn, tomato, potato): each frame votes with its best
+  detection among our crops; a view with only other plants → "Not a corn, potato or tomato leaf"
+  (grey). Ornamental plant: "Apple Scab Leaf 0.95" → "Not a corn, potato or tomato leaf"; potato
+  video: 3/4 correct, the 4th (late blight) had no potato detection at all (only "Blueberry leaf"),
+  now said honestly instead of "Healthy leaf (Blueberry leaf)".
+- **Same view, no new check:** looking back at the leaf checked last (40×22 thumbnail difference
+  < 12, within 60 s) shows its verdict again at once (`INSPECT_REUSE`). Calibrated on the videos:
+  same leaf with tremor ≤ 9.2, different leaves ≥ 21.8; real field scenes drift 10–55 within
+  seconds, so there a leaf is simply checked again (the safe side).
+- Debug view no longer draws the previous leaf's boxes while the next one is checked.
+- 27 unit tests (crop vote, reuse: only the last leaf, only within 60 s).
+
 **Lessons from 8.0–8.3 (dev laptop):**
 - `adb push` the test video only after the app has run once (it creates its files folder); pushing
   earlier puts the file in the wrong place ("video not found").
@@ -571,6 +597,15 @@ comparison, e.g. 7.6). They do not test real field conditions or unseen leaves -
 - Android's own "System UI isn't responding" dialog appears regularly: the laptop is past its limit
   (emulator ~2.9 GB + software-rendered 1920×1080). Not our app. Possible relief: the debug view
   redraws the full frame even for dropped frames (8×/s) - redraw only when something changed.
+- The debug view is OFF by default since 8.5 (black = see-through on the glasses): the emulator then
+  shows a black screen + popups. To see the video: settings → "Debug view", or `--ez debug true`.
+- **Emulator on the real graphics card** (`-gpu host`, AVD `hw.gpu.mode = host`; this laptop: NVIDIA
+  MX150): emulator CPU 520% → 152% (8 logical CPUs), plant backend per frame 3,871 → 1,875 ms (the
+  model gets the CPU back), no "System UI isn't responding" in the run. Software rendering
+  (`-gpu swiftshader_indirect`) was the main cause of those dialogs. Old config: `config.ini.bak-swiftshader`.
+- Never `pkill -f <name>` inside a `bash -c '...<name>...'` command: it matches its own shell and kills it.
+- Restart only the scheduler (workers keep running and re-register):
+  `pkill -f scheduler-java`, then start `scheduler-java` again with the same options.
 - Shell scripts must keep Unix line endings (`.gitattributes`); a CRLF `start-backend.sh` fails with
   `set: pipefail: invalid option name`.
 
@@ -589,6 +624,12 @@ Mitigation: replay recorded real footage through `FileSource` as soon as some ex
 the right disease popup within the plant deadline, the COCO stream shows the right popups on the
 moving videos, and the app recovers by itself from a backend restart and from simulated bad
 network.
+
+**Step 8 result:** met. Diseased leaf (file) → popup, each frame within the production plant
+deadline (backend p95 2.1 s < 3.5 s); right whenever the model is right (8/14 = the model's own
+level, 7.6 is the fix). COCO stream → "person" / "cow" popups on the moving videos, steady.
+Backend restart and bad network (throttling proxy) → recovers by itself, never stale (8.7).
+Not done: a leaf held in front of the webcam (camera path proven with the webcam; skipped).
 
 ---
 
