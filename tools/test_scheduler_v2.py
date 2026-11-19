@@ -8,6 +8,7 @@ import time
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# reuses the paths and the Proc helper from the first scheduler test
 from test_scheduler import CLI, CLIENT, MODEL, PY, ROOT, SCHEDULER, WORKER, Proc  # noqa: E402
 
 SCHED_PORT, SCHED2_PORT, BASE_PORT = 50751, 50752, 50761
@@ -19,6 +20,7 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
 
 
+# redis none so this test only covers routing and failover
 def start_scheduler(port, deadline_ms=300, session_cap=2):
     s = Proc([SCHEDULER, "--port", str(port), "--deadline-ms", str(deadline_ms), "--heartbeat-timeout-ms", "3000",
               "--report-seconds", "5", "--session-max-in-flight", str(session_cap), "--redis", "none"], f"scheduler:{port}")
@@ -52,11 +54,13 @@ def run_clients(cmds, timeout=300):
     return outs
 
 
+# reference answers computed without any network
 def worker_cli(images):
     out = subprocess.run([CLI, "--model", MODEL, *images], capture_output=True, text=True, check=True).stdout
     return {json.loads(l)["file"]: json.loads(l)["detections"] for l in out.splitlines() if l.strip()}
 
 
+# same labels and boxes up to float noise
 def same(a, b):
     return len(a) == len(b) and all(
         x["label"] == y["label"] and abs(x["confidence"] - y["confidence"]) < 1e-5
@@ -117,6 +121,7 @@ def main():
     check("no WORKER_FAILED / NO_WORKER", statuses.get("WORKER_FAILED", 0) + statuses.get("NO_WORKER", 0) == 0,
           dict(statuses))
 
+    # the session cap must protect the normal client from the noisy one
     print("\n4. a misbehaving client (10 frames per tick, no limit) next to a normal client")
     outs = run_clients([
         client_cmd(SCHED_PORT, "video", "--seconds", "6", "--fps", "4", "--burst", "10", "--json"),
@@ -136,6 +141,7 @@ def main():
           f"(p95 {good_c['client_latency_ms']['p95']} ms) vs alone {100 * alone_ok:.0f}% OK "
           f"(p95 {alone['client_latency_ms']['p95']} ms) - shared CPU, see the scheduler benchmark")
 
+    # max queue 0 makes a worker refuse a second frame so the scheduler has to retry
     print("\n5. queue full -> retry on another worker (separate scheduler, 2 workers that accept 1 frame each)")
     sched2 = start_scheduler(SCHED2_PORT, session_cap=4)
     mark2 = len(sched2.lines)
@@ -159,6 +165,7 @@ def main():
                                          "--max-in-flight", "2", "--json"),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
     time.sleep(7)
+    # killed without warning like a crash so no goodbye reaches the scheduler
     workers[2].stop(signal.SIGKILL)
     killed_at = time.time()
     outs = [p.communicate(timeout=120)[0] for p in procs]

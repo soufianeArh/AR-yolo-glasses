@@ -15,6 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(ROOT, "tools", "_gen")
 
 
+# compiles detection.proto into python classes at startup so the proto stays the only source
 def load_stubs():
     from grpc_tools import protoc
     os.makedirs(GEN, exist_ok=True)
@@ -60,6 +61,7 @@ class Stream:
                                                               ("grpc.max_send_message_length", 8 << 20)])
         self.stub = pbg.FrameStreamStub(self.channel)
         self.requests = queue.Queue()
+        # one slot per frame in flight like the in flight cap of the app
         self.slots = threading.Semaphore(max_in_flight)
         self.sent_at = {}
         self.results = []
@@ -70,6 +72,7 @@ class Stream:
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
+    # grpc pulls the frames to send from this generator untill it gets None
     def _iter(self):
         while True:
             item = self.requests.get()
@@ -77,6 +80,7 @@ class Stream:
                 return
             yield item
 
+    # runs in its own thread and measures the round trip of every answer
     def _read(self):
         try:
             for r in self.responses:
@@ -88,6 +92,7 @@ class Stream:
         except grpc.RpcError as e:
             self.error = e
 
+    # gives up instead of waiting when all slots are taken so the frame is dropped like on the glasses
     def try_send(self, frame_id, jpeg, blocking=False):
         if not self.slots.acquire(blocking=blocking):
             return False
@@ -134,6 +139,7 @@ def run_video(args):
         ok, img = cap.read()
         if not ok:
             break
+        # resample the video to the camera fps so frames repeat or get skipped
         while t <= idx / src_fps:
             frames.append(encode(img, args.width, args.quality))
             t += 1.0 / args.fps
@@ -149,6 +155,7 @@ def run_video(args):
     fid = 0
     while time.perf_counter() - start < args.seconds:
         for _ in range(args.burst or 1):
+            # with --burst many frames go out per tick to act like a misbehaving client
             if not s.try_send(fid, frames[n % len(frames)]):
                 dropped_client += 1
             fid += 1
@@ -162,6 +169,7 @@ def run_video(args):
     ok_lat = sorted(lat for r, lat in s.results if r.status == pb.OK and lat is not None)
     backend = sorted(r.backend_ms for r, _ in s.results if r.status == pb.OK)
     labels = Counter(d.label for r, _ in s.results for d in r.detections)
+    # p50 p95 p99 latencies and statuses that the tests and the benchmark read
     summary = {
         "seconds": round(elapsed, 1), "camera_fps": args.fps, "max_in_flight": args.max_in_flight,
         "frames_captured": fid, "dropped_on_client": dropped_client, "sent": fid - dropped_client,

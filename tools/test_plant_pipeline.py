@@ -17,6 +17,7 @@ from test_scheduler import CLI, CLIENT, PY, ROOT, SCHEDULER, WORKER, Proc  # noq
 SCHED_PORT, PLANT_PORT, COCO_PORT = 50451, 50461, 50462
 PLANT_MODEL = os.path.join(ROOT, "models", "plant.onnx")
 COCO_MODEL = os.path.join(ROOT, "models", "yolov8n.onnx")
+# plant inference takes seconds so it gets its own deadline
 PLANT_DEADLINE_MS = 3500
 SAMPLES = ["testdata/plant/corn-leaf-blight-01.png", "testdata/plant/tomato-leaf-blight-01.png",
            "testdata/plant/tomato-leaf-healthy-01.png"]
@@ -35,6 +36,7 @@ def send_images(model, files, resend=3):
     got = [json.loads(l) for l in out.splitlines() if l.strip()]
     for k, g in enumerate(got):
         tries = 0
+        # a slow cpu can miss the deadline so resend a few times before judging
         while g["status"] == "DROPPED_DEADLINE" and tries < resend:
             g = json.loads(subprocess.run([PY, CLIENT, "--target", f"127.0.0.1:{SCHED_PORT}", "--model", model,
                                            "images", g["file"]], capture_output=True, text=True,
@@ -44,6 +46,7 @@ def send_images(model, files, resend=3):
     return got
 
 
+# reference results from worker-cli with the same model
 def cli(model_path, name, files):
     out = subprocess.run([CLI, "--model", model_path, "--name", name, "--threads", "2", *files],
                          capture_output=True, text=True, check=True).stdout
@@ -93,6 +96,7 @@ def main():
         sys.exit("API did not start")
     http = httpx.Client(base_url=f"http://127.0.0.1:{API_PORT}", timeout=10)
 
+    # plant frames must go to plant-1 and coco frames to coco-1
     print("\n2. routing by model + plant results == worker-cli")
     plant_files = sorted(f"testdata/plant/{f}" for f in os.listdir("testdata/plant") if f.endswith(".png"))
     got = send_images("plant", plant_files)
@@ -115,6 +119,7 @@ def main():
           bool(slow_ok) and min(slow_ok) > 300,
           f"backend {min(slow_ok)}-{max(slow_ok)} ms, plant deadline {PLANT_DEADLINE_MS} ms" if slow_ok else "none OK")
 
+    # a rule that matches any label containing blight
     print("\n4. 'contains blight' rule through the API")
     r = http.post("/rules", json={"name": "any-blight", "label": "blight", "match": "contains",
                                   "min_confidence": 0.5, "min_count": 1, "cooldown_seconds": 0, "severity": "high"})
@@ -142,6 +147,7 @@ def main():
         cap = cv2.VideoCapture(tl["video"])
         frames, originals = [], []
         for k, h in enumerate(tl["holds"]):
+            # grab the frame in the middle of each hold
             cap.set(cv2.CAP_PROP_POS_FRAMES, int((h["hold_start_s"] + h["hold_end_s"]) / 2 * tl["fps"]))
             ok_, img = cap.read()
             p = os.path.join(tmp, f"{tl_path.split('.')[0]}-{k}.jpg")
@@ -158,6 +164,7 @@ def main():
             rows.append((os.path.basename(o), b, a, mid.get(p, {}).get("status", "?")))
     for name, b, a, st in rows:
         print(f"     {name[:34]:36} photo: {b[:28]:30} video frame: {a[:28]:30} {'same' if a == b else 'DIFFERENT'}")
+    # this one is a measurement and not a pass or fail check
     print(f"     measured: {agree}/{total} holds give the same top disease as the original photo")
     check("every mid-hold video frame was answered OK by the plant model",
           total > 0 and all(st == "OK" for *_, st in rows), f"{total} holds")

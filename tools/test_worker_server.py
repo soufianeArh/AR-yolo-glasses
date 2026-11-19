@@ -14,6 +14,7 @@ import grpc
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(ROOT, "tools", "_gen")
 MODEL = os.path.join(ROOT, os.environ.get("AR_MODEL", os.path.join("models", "yolov8n.onnx")))
+# the env vars AR_MODEL and AR_MODEL_NAME switch the whole test to the plant model
 MODEL_NAME = os.environ.get("AR_MODEL_NAME", "default")
 PLANT = MODEL_NAME == "plant"
 CALL_TIMEOUT = 60 if PLANT else 10
@@ -22,6 +23,7 @@ BIN = os.environ.get("AR_BIN") or os.path.join(ROOT, "worker-cpp", "build", "Rel
 SERVER = os.path.join(BIN, "worker-server.exe" if os.name == "nt" else "worker-server")
 CLI = os.path.join(BIN, "worker-cli.exe" if os.name == "nt" else "worker-cli")
 
+# test ports far from the real ones so it can run next to the backend
 WORKER_PORT, SCHED_PORT = 50961, 50951
 
 
@@ -66,6 +68,7 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
 
 
+# starts the real binary and waits for READY on stderr
 def start_worker(log_lines):
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     proc = subprocess.Popen(
@@ -116,6 +119,7 @@ def main():
               and list(hb.models) == [MODEL_NAME] and hb.threads == 2,
               f"id={hb.worker_id} addr={hb.address} models={list(hb.models)} threads={hb.threads}")
 
+    # the grpc answer must equal the cli answer box by box
     print("\n2. gRPC Detect == worker-cli, on every test image")
     cli = subprocess.run([CLI, "--model", MODEL, "--name", MODEL_NAME, *images], capture_output=True, text=True, check=True).stdout
     expected = {json.loads(l)["file"]: json.loads(l) for l in cli.splitlines() if l.strip()}
@@ -150,6 +154,7 @@ def main():
     res = stub.Detect(frame(200, b"x", models=["fire"]), timeout=10)
     check("models=['fire'] -> BAD_FRAME", res.status == pb.BAD_FRAME and "fire" in res.error, res.error)
 
+    # more frames than threads plus queue so some must be refused
     print("\n5. overload: 10 frames at once (1 running + 2 queued allowed)")
     with open(SAMPLE, "rb") as f:
         cow = f.read()
@@ -166,6 +171,7 @@ def main():
     check("some rejected with RESOURCE_EXHAUSTED, the rest OK", rejected >= 1 and ok >= 1 and other == 0,
           f"ok={ok} rejected={rejected} other={other}")
 
+    # deadlines shorter than one inference to check that the worker gives up
     print("\n6. tiny deadlines (60 ms, inference takes longer)")
     futures = [stub.Detect.future(frame(400 + i, cow), timeout=0.06) for i in range(3)]
     codes = []
@@ -180,6 +186,7 @@ def main():
     res = stub.Detect(frame(410, cow), timeout=CALL_TIMEOUT)
     check("normal frame works right after", res.status == pb.OK, f"{len(res.detections)} detections")
 
+    # the worker must keep serving and only retry its heartbeats
     print("\n7. scheduler goes down, then comes back")
     sched.stop(0).wait()
     time.sleep(2.5)
@@ -192,6 +199,7 @@ def main():
     check("heartbeats resume when the scheduler is back", len(fake.beats) > n_before,
           f"{len(fake.beats) - n_before} new heartbeats")
 
+    # the final counters prove the skipped and aborted frames really happend
     print("\n8. clean shutdown")
     if os.name == "nt":
         proc.send_signal(signal.CTRL_BREAK_EVENT)

@@ -11,11 +11,13 @@ import cv2
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# windows path turned into its /mnt/c form for wsl
 def wsl_path(p):
     drive, rest = os.path.splitdrive(os.path.abspath(p))
     return f"/mnt/{drive[0].lower()}{rest.replace(os.sep, '/')}"
 
 
+# runs the c++ tools inside wsl since they are built there
 def wsl(*args):
     home = subprocess.run(["wsl", "-d", "Ubuntu", "--exec", "printenv", "HOME"], capture_output=True, text=True,
                           check=True).stdout.strip()
@@ -23,6 +25,7 @@ def wsl(*args):
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
 
 
+# a .pt file from the training gets exported to onnx first
 def export_if_needed(path):
     if path.endswith(".onnx"):
         return path
@@ -64,6 +67,7 @@ def main():
     os.chdir(ROOT)
 
     manifest = json.load(open("testdata/plant/expected.json"))
+    # the healthy corn images are left out of the score
     files = sorted(f for f, v in manifest.items() if not v["expected"].startswith("healthy corn"))
 
     os.makedirs("runs/eval-holds", exist_ok=True)
@@ -78,6 +82,7 @@ def main():
             cv2.imwrite(p, img)
             holds.append((p, h["image"]))
 
+    # old and new model go through the exact same checks
     models = [("current (YOLOS, soufiane-easy)", args.old, args.old_conf),
               ("new (YOLOv8, trained)", export_if_needed(args.new), args.new_conf)]
     report = []
@@ -85,6 +90,7 @@ def main():
         print(f"\n== {name}: {path} (conf {conf})", flush=True)
         tops = top_labels(path, conf, files)
         correct = sum(tops[f] == manifest[f]["expected"] for f in files)
+        # stable means the video frame gets the same top label as its photo
         hold_tops = top_labels(path, conf, [p for p, _ in holds] + sorted({o for _, o in holds}))
         stable = sum(hold_tops[p] == hold_tops[o] for p, o in holds)
         infer, p95 = speed(path, "testdata/plant/plantdoc/tomato-leaf-late-blight-2.jpg")
@@ -101,6 +107,7 @@ def main():
         print(f"{r['model']:34} {r['accuracy']:>8} {r['accuracy_pct']:>2}% {r['stability']:>10} "
               f"{r['infer_ms_avg']:>11.0f} ms avg")
     os.makedirs("bench", exist_ok=True)
+    # saved so the two models can be compared later
     json.dump(report, open("bench/plant_models.json", "w"), indent=1)
     print("\nwrote bench/plant_models.json")
 

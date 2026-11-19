@@ -15,7 +15,9 @@ from test_scheduler import CLI, CLIENT, MODEL, PY, ROOT, SCHEDULER, WORKER, Proc
 
 CONTROL = os.path.join(ROOT, "control-python")
 VENV_BIN = os.path.dirname(PY)
+# own redis on 6390 and api on 8091 so the real backend is never touched
 SCHED_PORT, BASE_PORT, REDIS_PORT, API_PORT = 50551, 50561, 6390, 8091
+# a separate ar_test database that gets emptied at the start
 DB_URL = "postgresql+psycopg://ar:ar@127.0.0.1:5432/ar_test"
 STREAM = "ar:e2e"
 API = f"http://127.0.0.1:{API_PORT}"
@@ -30,6 +32,7 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
 
 
+# like Proc but with its own folder and env for the python services
 class Service(Proc):
     def __init__(self, cmd, name, cwd=None, env=None):
         self.name, self.lines, self.cond = name, [], threading.Condition()
@@ -38,6 +41,7 @@ class Service(Proc):
         threading.Thread(target=self._pump, daemon=True).start()
 
 
+# throwaway redis that never saves to disk
 def start_redis():
     p = subprocess.Popen(["redis-server", "--port", str(REDIS_PORT), "--save", "", "--appendonly", "no"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -98,6 +102,7 @@ def main():
     subprocess.run([os.path.join(VENV_BIN, "alembic"), "upgrade", "head"], cwd=CONTROL, env=ENV, check=True,
                    capture_output=True)
     with engine.begin() as c:
+        # start from empty tables so the counts below are exact
         c.execute(text("TRUNCATE alert, alert_rule, detection, frame RESTART IDENTITY CASCADE"))
 
     print("1. start test Redis, scheduler (publishing to it), 3 workers x 2 threads, consumer, API")
@@ -164,6 +169,7 @@ def main():
     print(f"     baseline: {100 * base_ok:.0f}% OK, client p50/p95 = "
           f"{base['client_latency_ms']['p50']}/{base['client_latency_ms']['p95']} ms")
 
+    # the glasses must not notice and the buffered results must still reach postgres
     print("\n5. REDIS DOWN: killed 3 s into a 12 s video, restarted (empty) 4 s later")
     before = db_frames(engine)
     mark = len(sched.lines)
@@ -182,6 +188,7 @@ def main():
     check("NOTHING LOST: results buffered during the outage reached Postgres", n - before == run["answered"],
           f"answered {run['answered']}, stored {n - before}")
 
+    # the consumer group remembers what was read so a restarted consumer catches up
     print("\n6. CONSUMER CRASH: SIGKILL 2 s into a 10 s video, restarted 4 s later")
     before = db_frames(engine)
     p = video(10, background=True)

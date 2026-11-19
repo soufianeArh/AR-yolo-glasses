@@ -11,6 +11,7 @@ from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# onnx has no bicubic resize that matches pytorch so it gets rewritten as matrix products
 from bicubic_matmul import matmul_bicubic  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,10 +40,12 @@ def main():
     inputs = [processor(images=Image.open(f).convert("RGB"), return_tensors="pt")["pixel_values"] for f in images]
 
     example = inputs[0]
+    # height and width stay dynamic because yolos keeps the image ratio
     h = torch.export.Dim("height", min=256, max=1024)
     w = torch.export.Dim("width", min=256, max=1024)
     print(f"exporting with example input {tuple(example.shape)} and dynamic height/width ...")
     with matmul_bicubic():
+        # external_data False keeps the whole model in one file
         torch.onnx.export(wrapped, (example,), OUT, input_names=["pixel_values"],
                           output_names=["logits", "pred_boxes"],
                           dynamic_shapes={"pixel_values": {2: h, 3: w}}, dynamo=True, opset_version=18,
@@ -50,7 +53,9 @@ def main():
 
     m = onnx.load(OUT)
     meta = {
+        # class names travel inside the model so the worker needs no extra file
         "names": str({int(k): v for k, v in model.config.id2label.items()}),
+        # the c++ worker reads model_type to pick the right detector
         "model_type": "yolos",
         "resize": f"shortest_edge={cfg['size']} longest_edge={cfg['max_size']} divisor=16",
         "image_mean": ",".join(str(x) for x in cfg["image_mean"]),
@@ -64,6 +69,7 @@ def main():
     onnx.save(m, OUT)
     print(f"wrote {OUT} ({os.path.getsize(OUT) / 1e6:.1f} MB)")
 
+    # load the exported file back and compare it with pytorch on every test image
     sess = ort.InferenceSession(OUT, providers=["CPUExecutionProvider"])
     print("input:", [(i.name, i.shape) for i in sess.get_inputs()],
           "outputs:", [(o.name, o.shape) for o in sess.get_outputs()])
@@ -76,6 +82,7 @@ def main():
         db = float(np.abs(boxes - ref_boxes.numpy()).max())
         worst_logit, worst_box = max(worst_logit, dl), max(worst_box, db)
         print(f"  {os.path.basename(f):28} input {tuple(x.shape[2:])}: max |logit diff| {dl:.2e}, max |box diff| {db:.2e}")
+    # tiny float diffs are normal and anything bigger means a broken export
     ok = worst_logit < 1e-3 and worst_box < 1e-4
     print("ONNX == PyTorch at every size:", "PASS" if ok else "FAIL",
           f"(worst logit diff {worst_logit:.2e}, worst box diff {worst_box:.2e})")

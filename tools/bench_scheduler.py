@@ -10,12 +10,15 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_scheduler import CLIENT, MODEL, PY, ROOT, SCHEDULER, WORKER, Proc  # noqa: E402
 
+# workers x threads setups that share the 4 cores in different ways
 CONFIGS = [(1, 4), (1, 6), (2, 2), (2, 3), (3, 2), (4, 1)]
+# one or two pairs of glasses at the same time
 LOADS = [1, 2]
 SCHED_PORT, BASE_PORT = 50651, 50661
 OUT = os.path.join(ROOT, "bench")
 
 
+# nearest rank percentile
 def pct(vals, p):
     if not vals:
         return None
@@ -45,6 +48,7 @@ def run_config(workers, threads, seconds):
         ps = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(n)]
         return [json.loads(p.communicate(timeout=secs + 120)[0]) for p in ps]
 
+    # short warmup run that is not measured
     clients(1, 3, raw=False)
 
     rows = []
@@ -59,6 +63,7 @@ def run_config(workers, threads, seconds):
             "ok_fps": round(ok / elapsed, 2), "answered": answered,
             "dropped_on_client": sum(o["dropped_on_client"] for o in outs),
             "p50": pct(lat, 50), "p95": pct(lat, 95), "p99": pct(lat, 99),
+            # share of frames that made the 300 ms deadline
             "under_300": round(100 * sum(1 for v in lat if v <= 300) / max(1, answered), 1),
             "under_400": round(100 * sum(1 for v in lat if v <= 400) / max(1, answered), 1),
             "statuses": {k: sum(o["statuses"].get(k, 0) for o in outs)
@@ -85,6 +90,7 @@ def main():
         with open(os.path.join(OUT, "results.json")) as f:
             all_rows = json.load(f)
     for rep in range(0 if args.summarize_only else args.repeats):
+        # reverse the order every other repeat so heat and throttling hit all setups the same
         order = CONFIGS if rep % 2 == 0 else list(reversed(CONFIGS))
         for workers, threads in order:
             t0 = time.time()
@@ -95,6 +101,7 @@ def main():
                       f"p50 {r['p50']} p95 {r['p95']} p99 {r['p99']} ms | <=300 ms: {r['under_300']}% "
                       f"| <=400 ms: {r['under_400']}%   ({time.time() - t0:.0f} s)", flush=True)
             all_rows.extend(rows)
+            # let the cpu cool down between two setups
             time.sleep(args.cooldown)
 
     if not args.summarize_only:
@@ -125,6 +132,7 @@ def main():
     print("\n" + table)
 
     import matplotlib
+    # draws straight to a file without any window
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     labels = [f"{w}x{t}" for w, t in CONFIGS]
