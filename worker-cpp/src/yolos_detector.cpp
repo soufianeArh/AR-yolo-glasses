@@ -17,6 +17,7 @@ double ms_since(Clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
+// precomputed weights for one resize direction
 struct Taps {
     std::vector<int> start;
     std::vector<int> count;
@@ -25,6 +26,7 @@ struct Taps {
     int precision = 0;
 };
 
+// integer weights like pillow so the result is the same to the bit
 Taps make_taps(int in_size, int out_size) {
     const double scale = static_cast<double>(in_size) / out_size;
     const double support = scale >= 1.0 ? scale : 1.0;
@@ -68,6 +70,7 @@ std::uint8_t to_u8(std::int32_t acc, int precision) {
 
 // same antialiased resize as the python processor or the boxes drift a bit
 cv::Mat resize_antialias(const cv::Mat& src, int out_w, int out_h) {
+    // horizontal pass first and then vertical like pillow does
     cv::Mat cur = src;
     if (out_w != src.cols) {
         const Taps th = make_taps(src.cols, out_w);
@@ -125,7 +128,7 @@ int int_after(const std::string& text, const std::string& key, int fallback) {
 
 }
 
-// shortest and longest side rules copied from the huggingface processor
+//shortest and longest side rules copied from the huggingface processor
 std::pair<int, int> YolosDetector::input_size(int height, int width, int shortest, int longest, int divisor) {
     double size = shortest;
     double raw_size = -1;
@@ -148,6 +151,7 @@ std::pair<int, int> YolosDetector::input_size(int height, int width, int shortes
     return {oh - oh % divisor, ow - ow % divisor};
 }
 
+//resize rules and normalisation come from the model metadata
 YolosDetector::YolosDetector(DetectorOptions options)
     : opt_(std::move(options)), model_(opt_.model_path, opt_.threads) {
     const auto in_shape = model_.input_shape();
@@ -196,6 +200,7 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
         const std::uint8_t* row = resized.ptr<std::uint8_t>(y);
         for (int x = 0; x < ow; ++x) {
             const int i = y * ow + x;
+            // normalised with the mean and std used in training
             out_r[i] = (row[3 * x + 2] * inv255 - mean_[0]) / std_[0];
             out_g[i] = (row[3 * x + 1] * inv255 - mean_[1]) / std_[1];
             out_b[i] = (row[3 * x + 0] * inv255 - mean_[2]) / std_[2];
@@ -209,6 +214,7 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
 
     t0 = Clock::now();
     const auto& ls = outputs[0].shape;
+    // yolos gives a fixed number of queries and each one is a box or no object
     const int queries = static_cast<int>(ls[1]);
     const int classes = static_cast<int>(ls[2]);
     const float* logits = outputs[0].data;
@@ -221,9 +227,11 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
         double sum = 0;
         for (int c = 0; c < classes; ++c) sum += std::exp(static_cast<double>(l[c] - mx));
         int best = 0;
+        // the last class is no object so it is never picked
         for (int c = 1; c < classes - 1; ++c) {
             if (l[c] > l[best]) best = c;
         }
+        //softmax over all classes gives the confidence
         const float score = static_cast<float>(std::exp(static_cast<double>(l[best] - mx)) / sum);
         if (!(score > opt_.conf_threshold)) continue;
         const float* b = boxes + static_cast<std::size_t>(q) * 4;
@@ -231,6 +239,7 @@ std::vector<Detection> YolosDetector::detect(const cv::Mat& bgr, StageTiming* ti
         result.push_back({names_.at(static_cast<std::size_t>(best)), score, c01(b[0] - b[2] / 2), c01(b[1] - b[3] / 2),
                           c01(b[0] + b[2] / 2), c01(b[1] + b[3] / 2), opt_.name});
     }
+    // best first and cut at max detections
     std::stable_sort(result.begin(), result.end(),
                      [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
     if (static_cast<int>(result.size()) > opt_.max_detections) result.resize(static_cast<std::size_t>(opt_.max_detections));

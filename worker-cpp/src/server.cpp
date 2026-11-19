@@ -54,9 +54,11 @@ struct Options {
     ar::DetectorOptions model;
 };
 
+// everything the grpc threads share so counters are atomics and the model sits behind a mutex
 struct WorkerState {
     Options opt;
     std::unique_ptr<ar::Detector> detector;
+    // one inference at a time and the onnx threads do the parallel work inside it
     std::mutex detector_mu;
     std::atomic<int> in_flight{0};
     std::atomic<double> avg_infer_ms{0};
@@ -84,11 +86,13 @@ class InferenceService final : public pb::InferenceWorker::Service {
 public:
     explicit InferenceService(WorkerState& s) : s_(s) {}
 
+    // called by the scheduler for every frame on a grpc thread
     grpc::Status Detect(grpc::ServerContext* ctx, const pb::Frame* frame, pb::FrameResult* result) override {
         result->set_session_id(frame->session_id());
         result->set_frame_id(frame->frame_id());
         result->set_worker_id(s_.opt.worker_id);
 
+        // a frame asking for another model is refused instead of guessed
         for (const auto& m : frame->models()) {
             if (m != s_.detector->name()) {
                 ++s_.bad_frames;
@@ -110,8 +114,10 @@ public:
             return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "worker queue full");
         }
 
+        // admitted frames wait here untill the one before is done
         std::lock_guard<std::mutex> lk(s_.detector_mu);
 
+        // the deadline passed while waiting so skip it and save the cpu
         if (ctx->IsCancelled()) {
             ++s_.skipped_deadline;
             return grpc::Status(grpc::StatusCode::DEADLINE_EXCEEDED, "deadline passed while queued");
@@ -150,6 +156,7 @@ public:
             result->set_status(pb::OK);
 
             const double prev = s_.avg_infer_ms.load();
+            // moving average that goes out in the heartbeat
             s_.avg_infer_ms.store(prev == 0 ? total : prev * 0.8 + total * 0.2);
             ++s_.served;
         } catch (const ar::BadFrame& e) {
@@ -170,6 +177,7 @@ private:
     WorkerState& s_;
 };
 
+// tells the scheduler every second that this worker is alive and how busy it is
 void heartbeat_loop(WorkerState& s) {
     const auto& o = s.opt;
     // default backoff grows to two minutes so after a long scheduler outage
@@ -189,6 +197,7 @@ void heartbeat_loop(WorkerState& s) {
         hb.add_models(s.detector->name());
         const int n = s.in_flight.load();
         hb.set_busy(n > 0);
+        // frames waiting behind the one that runs
         hb.set_queue_depth(static_cast<std::uint32_t>(n > 1 ? n - 1 : 0));
         hb.set_avg_infer_ms(static_cast<float>(s.avg_infer_ms.load()));
         hb.set_threads(static_cast<std::uint32_t>(o.model.threads));
@@ -261,6 +270,7 @@ int main(int argc, char** argv) {
     try {
         const auto t0 = Clock::now();
         state.detector = ar::load_detector(o.model);
+        // one warmup inference on a gray image so the first real frame is not slow
         state.detector->detect(cv::Mat(480, 640, CV_8UC3, cv::Scalar(114, 114, 114)));
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
         log(o.worker_id, "model '" + o.model.name + "' loaded + warmed up in " + std::to_string(ms) + " ms (" +
@@ -291,6 +301,7 @@ int main(int argc, char** argv) {
     std::signal(SIGBREAK, on_signal);
 #endif
 
+    // the watcher and the heartbeats run next to the grpc threads
     std::thread watcher(deadline_watcher, std::ref(state));
     std::thread hb;
     if (!o.scheduler.empty()) hb = std::thread(heartbeat_loop, std::ref(state));

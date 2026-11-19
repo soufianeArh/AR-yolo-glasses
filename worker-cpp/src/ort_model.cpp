@@ -37,6 +37,7 @@ std::vector<std::string> parse_names(const std::string& text) {
     return names;
 }
 
+// the session plus what the abort needs
 struct OrtModel::Impl {
     std::unique_ptr<Ort::Session> session;
     std::string input_name;
@@ -45,6 +46,7 @@ struct OrtModel::Impl {
     std::vector<Ort::Value> last_outputs;
 
     std::mutex run_mu;
+    // options of the run in progress so abort can reach it
     Ort::RunOptions* current_run = nullptr;
     bool abort_requested = false;
 };
@@ -55,9 +57,11 @@ OrtModel::OrtModel(const std::string& path, int threads) : impl_(std::make_uniqu
     if (!std::filesystem::exists(p)) throw std::runtime_error("model file not found: " + path);
 
     Ort::SessionOptions options;
+    // intra op threads split one node and inter op stays 1 so nodes run one after the other
     options.SetIntraOpNumThreads(threads);
     options.SetInterOpNumThreads(1);
     options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+    // lets onnx runtime fuse nodes once at load time
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     impl_->session = std::make_unique<Ort::Session>(ort_env(), p.c_str(), options);
 
@@ -91,6 +95,7 @@ std::optional<std::string> OrtModel::metadata(const std::string& key) const {
 std::vector<OrtModel::Output> OrtModel::run(const float* input, const std::vector<std::int64_t>& shape) {
     std::size_t count = 1;
     for (const auto d : shape) count *= static_cast<std::size_t>(d);
+    // wraps the input buffer without a copy
     Ort::Value in = Ort::Value::CreateTensor<float>(impl_->memory, const_cast<float*>(input), count, shape.data(),
                                                     shape.size());
     const char* in_names[] = {impl_->input_name.c_str()};
@@ -103,6 +108,7 @@ std::vector<OrtModel::Output> OrtModel::run(const float* input, const std::vecto
         impl_->current_run = &run_options;
         impl_->abort_requested = false;
     }
+    // clears current_run when run returns even after an exception
     struct Unpublish {
         Impl& impl;
         ~Unpublish() {
@@ -119,6 +125,7 @@ std::vector<OrtModel::Output> OrtModel::run(const float* input, const std::vecto
             std::lock_guard<std::mutex> lk(impl_->run_mu);
             aborted = impl_->abort_requested;
         }
+        // a terminated run looks like any onnx error so the flag tells them apart
         if (aborted) throw Aborted("inference aborted");
         throw;
     }

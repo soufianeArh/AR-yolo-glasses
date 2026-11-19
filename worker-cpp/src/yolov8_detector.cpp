@@ -18,6 +18,7 @@ double ms_since(Clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
+// rounds half to even like python so the letterbox matches ultralytics
 int py_round(double v) { return static_cast<int>(std::nearbyint(v)); }
 
 struct Candidate {
@@ -26,6 +27,7 @@ struct Candidate {
     int cls;
 };
 
+// overlap of two boxes from 0 to 1
 float iou(const Candidate& a, const Candidate& b) {
     const float iw = std::max(0.f, std::min(a.x2, b.x2) - std::max(a.x1, b.x1));
     const float ih = std::max(0.f, std::min(a.y2, b.y2) - std::max(a.y1, b.y1));
@@ -60,6 +62,7 @@ std::vector<std::size_t> nms(const std::vector<Candidate>& c, float iou_threshol
 
 }
 
+// checks the shapes once at load so detect can trust them
 YoloV8Detector::YoloV8Detector(DetectorOptions options)
     : opt_(std::move(options)), model_(opt_.model_path, opt_.threads) {
     const auto in_shape = model_.input_shape();
@@ -73,6 +76,7 @@ YoloV8Detector::YoloV8Detector(DetectorOptions options)
     if (out_shape.size() != 3 || out_shape[0] != 1 || out_shape[1] <= 4 || out_shape[2] <= 0) {
         throw std::runtime_error("expected a [1, 4+classes, candidates] model output");
     }
+    // 4 box values and then one score per class
     num_classes_ = static_cast<int>(out_shape[1]) - 4;
     num_candidates_ = static_cast<int>(out_shape[2]);
 
@@ -114,6 +118,7 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
     float* out_r = input_.data();
     float* out_g = out_r + hw;
     float* out_b = out_g + hw;
+    // bgr pixels to rgb planes and 0..255 to 0..1
     for (int y = 0; y < input_h_; ++y) {
         const std::uint8_t* row = boxed.ptr<std::uint8_t>(y);
         const int base = y * input_w_;
@@ -133,6 +138,7 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
     t0 = Clock::now();
     const int n = num_candidates_;
     std::vector<Candidate> cands;
+    // keep the best class of every candidate above the confidence
     for (int a = 0; a < n; ++a) {
         int best = 0;
         float best_score = out[4 * n + a];
@@ -149,12 +155,14 @@ std::vector<Detection> YoloV8Detector::detect(const cv::Mat& bgr, StageTiming* t
         cands.push_back({cx - half_w, cy - half_h, cx + half_w, cy + half_h, best_score, best});
     }
 
+    // drop boxes that overlap a better box of the same class
     const auto keep = nms(cands, opt_.iou_threshold, opt_.max_detections);
 
     const double gain_x = static_cast<double>(new_w) / img_w;
     const double gain_y = static_cast<double>(new_h) / img_h;
     const int pad_x = py_round((input_w_ - new_w) / 2.0 - 0.1);
     const int pad_y = py_round((input_h_ - new_h) / 2.0 - 0.1);
+    // undo the padding and the scale then go to 0..1 of the original image
     auto to_x = [&](float v) {
         const double px = std::clamp((v - pad_x) / gain_x, 0.0, static_cast<double>(img_w));
         return static_cast<float>(px / img_w);

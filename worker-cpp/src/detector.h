@@ -19,6 +19,7 @@ struct Detection {
     std::string model;
 };
 
+//time spent in each stage of one frame
 struct StageTiming {
     double decode_ms = 0;
     double preprocess_ms = 0;
@@ -27,34 +28,41 @@ struct StageTiming {
     double total() const { return decode_ms + preprocess_ms + infer_ms + postprocess_ms; }
 };
 
+// the image bytes cannot be used so the answer is BAD_FRAME
 struct BadFrame : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-// thrown when the scheduler gave up on the frame in the middle of the inference
+//thrown when the scheduler gave up on the frame in the middle of the inference
 struct Aborted : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// common interface so the server does not care which model family is loaded
 class Detector {
 public:
     virtual ~Detector() = default;
 
+    //each model family does its own resize and output decoding
     virtual std::vector<Detection> detect(const cv::Mat& bgr, StageTiming* timing = nullptr) = 0;
 
+    //decodes the jpeg and then calls detect
     std::vector<Detection> detect_encoded(const std::uint8_t* data, std::size_t size,
                                           StageTiming* timing = nullptr);
 
     virtual const std::string& name() const = 0;
     virtual const std::vector<std::string>& class_names() const = 0;
 
+    // stops the running inference from another thread
     virtual void abort_current() {}
 };
 
+//filled from the command line of worker-server or worker-cli
 struct DetectorOptions {
     std::string model_path;
     std::string name = "default";
     std::string model_type = "auto";
+    // detections below this confidence are thrown away
     float conf_threshold = 0.40f;
     float iou_threshold = 0.50f;
     int max_detections = 300;
