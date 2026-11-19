@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
+#make sure the script stop at the first problem
+#-o pipefail is trigerrining failures/e stops at them/ u special failure
 set -euo pipefail
 
 # plant only by default because plant and coco together dont fit this cpu
+#set default vars
 COCO=0; COCO_THREADS=1; PLANT_THREADS=3; PLANT_MODEL=models/plant.onnx; CONTROL=0; PORT=50051; DEADLINE=300; PLANT_DEADLINE=3500
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -19,6 +22,7 @@ done
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
+# CHECK DEFAULT FIRST
 BIN=${AR_BIN:-$HOME/ar-build/worker-cpp}
 VENV=${AR_VENV:-$HOME/ar-venv}
 LOG_DIR=${AR_LOG_DIR:-/tmp/ar-backend}
