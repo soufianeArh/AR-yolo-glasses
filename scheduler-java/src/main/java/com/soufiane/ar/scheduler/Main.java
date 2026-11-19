@@ -11,9 +11,11 @@ import java.util.concurrent.TimeUnit;
 
 public final class Main {
 
+    // wires everything together and then blocks untill the server stops
     public static void main(String[] args) throws Exception {
         final Config cfg;
         try {
+            // bad options print the usage and exit
             cfg = Config.parse(args);
         } catch (RuntimeException e) {
             System.err.println(e.getMessage() + "\n" + Config.USAGE);
@@ -23,14 +25,17 @@ public final class Main {
 
         WorkerRegistry registry = new WorkerRegistry(cfg.heartbeatTimeoutMs());
         Metrics metrics = new Metrics();
+        // no publisher at all with --redis none
         ResultPublisher publisher = cfg.redis().isEmpty() ? null
                 : new ResultPublisher(cfg.redis(), cfg.stream(), cfg.redisBuffer(), cfg.streamMaxLen());
         metrics.setPublisher(publisher);
         FrameStreamService frames = new FrameStreamService(registry, metrics, cfg, publisher);
 
         Server server = Grpc.newServerBuilderForPort(cfg.port(), InsecureServerCredentials.create())
+                // virtual threads so thousands of waiting calls cost almost nothing
                 .executor(Executors.newVirtualThreadPerTaskExecutor())
                 .maxInboundMessageSize(8 * 1024 * 1024)
+                // the interceptor reads the device token before any frame arrives
                 .addService(ServerInterceptors.intercept(frames, new FrameStreamService.AuthInterceptor()))
                 .addService(new WorkerControlService(registry))
                 .build()
@@ -41,6 +46,7 @@ public final class Main {
             t.setDaemon(true);
             return t;
         });
+        // every second the workers without a recent heartbeat are marked unhealthy
         timer.scheduleAtFixedRate(registry::sweep, 1, 1, TimeUnit.SECONDS);
         if (cfg.reportSeconds() > 0) {
             timer.scheduleAtFixedRate(() -> metrics.report(registry), cfg.reportSeconds(), cfg.reportSeconds(),
@@ -62,6 +68,7 @@ public final class Main {
             Log.info("stopped. totals:" + metrics.totals());
         }, "shutdown"));
 
+        // start-backend.sh waits for this READY line before starting the workers
         Log.info("READY listening on 0.0.0.0:" + cfg.port() + ", frame deadline " + cfg.deadlineMs()
                 + " ms" + (cfg.modelDeadlinesMs().isEmpty() ? "" : " (per model: " + cfg.modelDeadlinesMs() + ")")
                 + ", heartbeat timeout " + cfg.heartbeatTimeoutMs() + " ms, session cap "

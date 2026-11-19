@@ -3,10 +3,12 @@ package com.soufiane.ar.scheduler;
 import java.util.Map;
 import java.util.TreeMap;
 
+// all the options in one read only record
 record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, int heartbeatTimeoutMs,
               int reportSeconds, int sessionMaxInFlight, int minRetryMs,
               String redis, String stream, int redisBuffer, long streamMaxLen) {
 
+    // printed when an option is wrong or missing
     static final String USAGE = """
             usage: scheduler-java [--port 50051] [--deadline-ms 300] [--model-deadline plant=3500,...]
                                   [--heartbeat-timeout-ms 3000] [--report-seconds 5]
@@ -35,6 +37,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
         return modelDeadlinesMs.getOrDefault(model, deadlineMs);
     }
 
+    // parses model=ms pairs and several pairs can be chained
     static Map<String, Integer> parseModelDeadlines(String spec) {
         Map<String, Integer> out = new TreeMap<>();
         for (String part : spec.split(",")) {
@@ -50,6 +53,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
         return out;
     }
 
+    // the plant model needs seconds while a live coco frame only gets 300 ms
     static final Map<String, Integer> DEFAULT_MODEL_DEADLINES = Map.of("plant", 3500);
 
     static Config parse(String[] args) {
@@ -58,6 +62,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
         String redis = "127.0.0.1:6379", stream = "ar:results";
         int redisBuffer = 10_000;
         long streamMaxLen = 100_000;
+        // every option has a value so the loop always reads two args at once
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             if (i + 1 >= args.length) throw new IllegalArgumentException("missing value after " + a);
@@ -70,6 +75,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
                 case "--report-seconds" -> report = Integer.parseInt(v);
                 case "--session-max-in-flight" -> sessionMax = Integer.parseInt(v);
                 case "--min-retry-ms" -> minRetry = Integer.parseInt(v);
+                // none turns publishing off
                 case "--redis" -> redis = v.equals("none") ? "" : v;
                 case "--stream" -> stream = v;
                 case "--redis-buffer" -> redisBuffer = Integer.parseInt(v);
@@ -77,6 +83,7 @@ record Config(int port, int deadlineMs, Map<String, Integer> modelDeadlinesMs, i
                 default -> throw new IllegalArgumentException("unknown option " + a);
             }
         }
+        // copyOf makes the deadline map read only
         return new Config(port, deadline, Map.copyOf(modelDeadlines), hbTimeout, report, sessionMax, minRetry,
                 redis, stream, redisBuffer, streamMaxLen);
     }

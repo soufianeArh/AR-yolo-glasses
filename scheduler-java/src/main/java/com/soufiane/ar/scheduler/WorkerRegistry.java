@@ -19,6 +19,7 @@ import java.util.function.LongSupplier;
 
 final class WorkerRegistry implements AutoCloseable {
 
+    //everything the scheduler knows about one c++ worker
     static final class Worker {
         final String id;
         volatile String address;
@@ -29,6 +30,7 @@ final class WorkerRegistry implements AutoCloseable {
         volatile long lastSeenNanos;
         volatile boolean markedHealthy = true;
 
+        // frames sent to this worker and not answered yet
         final AtomicInteger inFlight = new AtomicInteger();
         long lastPickedNanos;
         final AtomicLong sent = new AtomicLong();
@@ -79,6 +81,7 @@ final class WorkerRegistry implements AutoCloseable {
         this.clock = clock;
     }
 
+    // the first heartbeat registers the worker and the next ones refresh its load and health
     synchronized HeartbeatAck onHeartbeat(WorkerHeartbeat hb) {
         final long now = clock.getAsLong();
         final String id = hb.getWorkerId();
@@ -93,6 +96,7 @@ final class WorkerRegistry implements AutoCloseable {
             workers.put(id, w);
             Log.info("worker registered: " + id + " at " + hb.getAddress() + " models=" + hb.getModelsList()
                     + " threads=" + hb.getThreads());
+        // same id from a new address is refused while the old one is still alive
         } else if (!w.address.equals(hb.getAddress())) {
             if (w.isHealthy(now, timeoutNanos)) {
                 return HeartbeatAck.newBuilder().setAccepted(false).build();
@@ -109,6 +113,7 @@ final class WorkerRegistry implements AutoCloseable {
         w.lastSeenNanos = now;
 
         ConnectivityState state = w.channel.getState(false);
+        // the worker is alive again so reconnect now instead of waiting for the grpc backoff
         if (state == ConnectivityState.TRANSIENT_FAILURE || state == ConnectivityState.IDLE) {
             w.channel.resetConnectBackoff();
             w.channel.getState(true);
@@ -134,6 +139,7 @@ final class WorkerRegistry implements AutoCloseable {
         Worker best = null;
         for (Worker w : workers.values()) {
             if (w == exclude || !w.isHealthy(now, timeoutNanos) || !w.models.contains(model)) continue;
+            // fewest frames in flight wins and on a tie the one picked longest ago
             if (best == null
                     || w.inFlight.get() < best.inFlight.get()
                     || (w.inFlight.get() == best.inFlight.get() && w.lastPickedNanos < best.lastPickedNanos)) {
@@ -148,10 +154,12 @@ final class WorkerRegistry implements AutoCloseable {
         return Optional.ofNullable(best);
     }
 
+    // called when the answer or the error comes back
     void release(Worker w) {
         w.inFlight.decrementAndGet();
     }
 
+    // marks the worker unhealthy right away instead of waiting for the heartbeat timeout
     synchronized void suspend(Worker w,String reason) {
         final long now = clock.getAsLong();
         if (w.isHealthy(now, timeoutNanos)) {
@@ -161,6 +169,7 @@ final class WorkerRegistry implements AutoCloseable {
         }
     }
 
+    // runs every second from Main
     void sweep() {
         final long now = clock.getAsLong();
         for (Worker w : workers.values()) {

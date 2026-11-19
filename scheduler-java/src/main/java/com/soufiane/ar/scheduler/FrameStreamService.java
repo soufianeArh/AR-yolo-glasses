@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+// the grpc service the glasses talk to
+// one stream per pair of glasses with one Session object behind it
 final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
 
     static final String DEFAULT_MODEL = "default";
@@ -60,6 +62,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         this.publisher = publisher;
     }
 
+    // short hash of the token so the real token never ends up in logs or in redis
     static String deviceId(String token) {
         if (token == null || token.isEmpty()) return "anonymous";
         try {
@@ -70,6 +73,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         }
     }
 
+    // called once when a pair of glasses opens its stream
     @Override
     public StreamObserver<Frame> stream(StreamObserver<FrameResult> out) {
         String token = DEVICE_TOKEN.get();
@@ -82,6 +86,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
         };
     }
 
+    // a busy or unreachable worker is worth one more try on another worker
     private static boolean retryable(Status.Code code) {
         return code == Status.Code.RESOURCE_EXHAUSTED || code == Status.Code.UNAVAILABLE;
     }
@@ -110,6 +115,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             final Frame frame = incoming.toBuilder().setSessionId(id).build();
             final String model = frame.getModelsCount() == 0 ? DEFAULT_MODEL : frame.getModels(0);
 
+            // too many frames from this pair of glasses already so answer right away
             if (pending.get() >= cfg.sessionMaxInFlight()) {
                 send(failure(frame, ResultStatus.SESSION_LIMIT, "",
                         "session has " + cfg.sessionMaxInFlight() + " frames in flight already"), model, t0, false);
@@ -137,6 +143,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
 
             ListenableFuture<FrameResult> call;
             try {
+                // the worker only gets the time that is left so it can give up by itself
                 call = w.stub.withDeadlineAfter(leftMs, TimeUnit.MILLISECONDS).detect(frame);
             } catch (RuntimeException e) {
                 registry.release(w);
@@ -170,6 +177,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                     FrameResult fail = failure(frame, rs, w.id, why);
 
                     final long left = cfg.deadlineFor(model) - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+                    // only one retry and only if enough of the deadline is left
                     if (failedWorker == null && retryable(st.getCode()) && left >= cfg.minRetryMs()) {
                         metrics.retried();
                         attempt(frame, model, t0, w, fail);
@@ -190,6 +198,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
                     .build();
         }
 
+        // every answer goes back to the glasses and a copy goes to redis
         private void send(FrameResult r, String model, long t0, boolean counted) {
             final int backendMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             final FrameResult result = r.toBuilder().setBackendMs(backendMs).build();
@@ -224,6 +233,7 @@ final class FrameStreamService extends FrameStreamGrpc.FrameStreamImplBase {
             }
         }
 
+        // close the stream only once the client is done and nothing is pending
         private void maybeFinish() {
             if (halfClosed.get() && pending.get() == 0 && finished.compareAndSet(false, true)) {
                 synchronized (out) {

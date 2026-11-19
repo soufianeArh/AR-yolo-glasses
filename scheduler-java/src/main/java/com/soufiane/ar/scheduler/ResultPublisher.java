@@ -13,8 +13,11 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+// copies every result to a redis stream from its own thread
+// so the glasses never wait for redis
 final class ResultPublisher implements AutoCloseable {
 
+    // result bytes plus the device and when the scheduler recieved the frame
     private record Item(byte[] pb, String device, long receivedMs) {}
 
     private static final byte[] F_PB = "pb".getBytes(StandardCharsets.UTF_8);
@@ -44,6 +47,7 @@ final class ResultPublisher implements AutoCloseable {
         this.thread.start();
     }
 
+    // called from the grpc threads so it must never block
     void publish(FrameResult result, String device, long receivedMs) {
         Item item = new Item(result.toByteArray(), device, receivedMs);
         // redis is down or slow so drop the oldest result and never block the glasses
@@ -56,6 +60,7 @@ final class ResultPublisher implements AutoCloseable {
         return buffer.size();
     }
 
+    // background thread that sends the buffer to redis in batches
     private void loop() {
         List<Item> batch = new ArrayList<>(256);
         Jedis jedis = null;
@@ -67,9 +72,11 @@ final class ResultPublisher implements AutoCloseable {
                     Item first = buffer.poll(200, TimeUnit.MILLISECONDS);
                     if (first == null) continue;
                     batch.add(first);
+                    // take up to 256 results at once
                     buffer.drainTo(batch, 255);
                 }
                 if (jedis == null) jedis = new Jedis(host, port, 2000);
+                // one network round trip for the whole batch
                 Pipeline p = jedis.pipelined();
                 XAddParams params = XAddParams.xAddParams().maxLen(maxLen).approximateTrimming();
                 for (Item it : batch) {
@@ -110,12 +117,14 @@ final class ResultPublisher implements AutoCloseable {
                     Thread.currentThread().interrupt();
                     return;
                 }
+                //redis is down so wait a bit longer each time up to 5s
                 backoffMs = Math.min(backoffMs * 2, 5000);
             }
         }
         if (jedis != null) jedis.close();
     }
 
+    //gives the thread 3 s to flush what is left
     @Override
     public void close() {
         running = false;
