@@ -25,11 +25,12 @@ cd "$ROOT"
 # CHECK DEFAULT FIRST
 BIN=${AR_BIN:-$HOME/ar-build/worker-cpp}
 VENV=${AR_VENV:-$HOME/ar-venv}
+#all services will log here
 LOG_DIR=${AR_LOG_DIR:-/tmp/ar-backend}
 mkdir -p "$LOG_DIR"
 PIDS="$LOG_DIR/pids"
 [ -f "$PIDS" ] && { echo "already running? $PIDS exists - run scripts/stop-backend.sh first"; exit 1; }
-
+#ensuring the async
 wait_for() {
   for _ in $(seq 1 $(( $3 * 10 ))); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done
   echo "timed out waiting for '$2' in $1"; tail -5 "$1"; return 1

@@ -8,6 +8,8 @@ import com.soufiane.ar.proto.v1.ResultStatus
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 
+// the look and hold logic
+// the frame type is a Bitmap in the app and a plain IntArray in the tests
 class InspectController<F : Any>(
     private val send: (frameId: Long, image: ByteArray, models: List<String>) -> Boolean,
     private val thumb: (F) -> IntArray,
@@ -23,6 +25,7 @@ class InspectController<F : Any>(
     private val onLost: () -> Unit = {},
     private val onUpdate: (Snapshot<F>) -> Unit,
 ) {
+    // moving then checking then showing and back to moving once the view moves
     enum class State { MOVING, CHECKING, SHOWING }
     enum class Kind { DISEASE, HEALTHY, NONE, UNCERTAIN, FAILED, OTHER_PLANT }
 
@@ -52,6 +55,7 @@ class InspectController<F : Any>(
     private var holdStartPos = 0L
     private var holdStartTime = 0L
     private var movedDuringCheck = false
+    // id of the frame waiting for its answer or -1 when nothing is in flight
     private var pendingId = -1L
     private var pendingSince = 0L
     private val votes = ArrayList<FrameResult>()
@@ -104,8 +108,10 @@ class InspectController<F : Any>(
         publish()
     }
 
+    // every answer from the scheduler counts as one vote
     fun onResult(r: FrameResult, roundTripMs: Long) {
         synchronized(lock) {
+            // late answer from an older check so ignore it
             if (r.frameId != pendingId) return
             pendingId = -1
             lastResult = r
@@ -158,6 +164,7 @@ class InspectController<F : Any>(
         sendFrame(frame, positionMs)
     }
 
+    // only one frame in flight at a time so the plant model is never flooded
     private fun sendFrame(frame: F, positionMs: Long) {
         val image = encode(frame)
         pendingId = nextFrameId++
@@ -234,6 +241,7 @@ class InspectController<F : Any>(
             return Verdict(kind, winner, conf, agree, ok.size, null)
         }
 
+        // a tiny grey 40x22 image is enough to tell if the view moved
         fun thumbnail(b: Bitmap): IntArray {
             val small = Bitmap.createScaledBitmap(b, 40, 22, true)
             val px = IntArray(40 * 22)

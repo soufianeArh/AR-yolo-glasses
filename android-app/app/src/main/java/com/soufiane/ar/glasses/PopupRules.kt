@@ -3,6 +3,7 @@ package com.soufiane.ar.glasses
 import com.soufiane.ar.glasses.InspectController.Kind
 
 object PopupRules {
+    // plain argb ints so this file has no android code and runs in the jvm tests
     const val ORANGE = 0xFFFF963C.toInt()
     const val GREEN = 0xFF78FF78.toInt()
     const val YELLOW = 0xFFFFE650.toInt()
@@ -14,10 +15,12 @@ object PopupRules {
     // always a dot even on a chinese or french device
     fun f2(x: Float): String = String.format(java.util.Locale.US, "%.2f", x)
 
+    // turns a verdict into the popup text and its colour
     fun forVerdict(v: InspectController.Verdict, minConf: Float): Content {
         val namesSomething = v.kind == Kind.DISEASE || v.kind == Kind.HEALTHY
         val sure = !namesSomething || v.confidence >= minConf
         return when {
+            // below the threshold we say not sure instead of naming a disease
             namesSomething && !sure ->
                 Content(Lang.t("not_sure", Lang.label(v.label), f2(v.confidence)), YELLOW, false)
             v.kind == Kind.NONE || v.kind == Kind.FAILED || v.kind == Kind.OTHER_PLANT -> Content(v.text, GREY, true)
@@ -46,6 +49,7 @@ object PopupRules {
                 label = null; count = 0
                 return null
             }
+            // how many answers in a row had the same top label
             count = if (top.first == label) count + 1 else 1
             label = top.first
             return if (count >= needed) top else null

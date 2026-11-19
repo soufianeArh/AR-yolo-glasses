@@ -6,11 +6,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
+// one grpc stream at a time that reconnects by itself
 class Connection(
     private val host: String,
     private val port: Int,
     private val token: String,
     private val onResult: (FrameResult, Long) -> Unit,
+    // wait 1 2 4 8 and then 10 s between two attempts
     private val backoffMs: List<Long> = listOf(1000, 2000, 4000, 8000, 10000),
     private val connectTimeoutMs: Long = 5000,
     private val onState: (State, String) -> Unit,
@@ -30,6 +32,7 @@ class Connection(
 
     enum class SendResult { SENT, NOT_CONNECTED, NETWORK_BUSY }
 
+    // never queues a frame when not connected or when the network is still busy
     fun trySend(frameId: Long, image: ByteArray, models: List<String>): SendResult {
         val c = synchronized(lock) { if (state == State.CONNECTED) client else null } ?: return SendResult.NOT_CONNECTED
         if (!c.canSend()) {
@@ -62,6 +65,7 @@ class Connection(
         c?.close()
     }
 
+    // opens a new stream and then polls the channel untill it is ready
     private fun connect() {
         val c: BackendClient
         synchronized(lock) {
@@ -69,6 +73,7 @@ class Connection(
             setState(State.CONNECTING, "attempt ${attempt + 1} to $host:$port")
             lateinit var self: BackendClient
             self = BackendClient(host, port, token,
+                // answers from a replaced stream are dropped here
                 { r, rtt -> if (isCurrent(self)) onResult(r, rtt) },
                 { e -> timer.execute { lost(self, e) } })
             c = self
@@ -107,6 +112,7 @@ class Connection(
             setState(State.DISCONNECTED, "${e.javaClass.simpleName}: ${e.message?.take(120)}; retry in $delay ms")
         }
         c.closeQuietly()
+        // try again once the backoff delay is over
         timer.schedule({ connect() }, delay, TimeUnit.MILLISECONDS)
     }
 

@@ -35,6 +35,8 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var answer: TextView
 
+    // generation changes on every stop so a late setup or a late answer
+    // from an old pipeline knows it is outdated
     private val pipeLock = Any()
     private var generation = 0
     private var source: FrameSource? = null
@@ -301,6 +303,7 @@ class MainActivity : Activity() {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
+    // loads the settings and starts the right source and mode with a new connection
     private fun startPipeline() {
         stopPipeline("restart")
         settings = AppSettings.load(getSharedPreferences(PREFS, MODE_PRIVATE))
@@ -328,6 +331,7 @@ class MainActivity : Activity() {
         updateBar()
     }
 
+    // closes the source and the connection and bumps the generation
     private fun stopPipeline(why: String) {
         val (src, close) = synchronized(pipeLock) {
             generation++
@@ -482,12 +486,14 @@ class MainActivity : Activity() {
         }
         closer = conn::close
         conn.start()
+        // frames are skipped while there is no server so nothing gets checked for nothing
         src.start(s.fps.toDouble()) { f, pos -> if (conn.state == Connection.State.CONNECTED) ctrl.onFrame(f, pos) }
     }
 
     private fun showInspection(snap: InspectController.Snapshot<*>, s: AppSettings) {
         if (connLine == null) answer.text = snap.checking ?: ""
         val v = snap.verdict ?: return
+        // one popup per verdict even though snapshots arrive on every frame
         if (snap.verdictHold == lastPopupHold) return
         lastPopupHold = snap.verdictHold
         if (connWasLost) return
